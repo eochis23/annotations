@@ -26,6 +26,7 @@
 #include "config.h"
 
 #include <glib/gi18n.h>
+#include <stdio.h>
 #include <string.h>
 #include <gdk/gdk.h>
 #if defined(GDK_WINDOWING_WAYLAND)
@@ -34,9 +35,6 @@
 #include <graphene.h>
 #include <gtk/gtk.h>
 
-#ifdef HAVE_GTK4_LAYER_SHELL
-# include <gtk4-layer-shell/gtk4-layer-shell.h>
-#endif
 #if defined(GDK_WINDOWING_X11)
 # include <gdk/x11/gdkx.h>
 #endif
@@ -97,28 +95,62 @@ struct _AnnotationsWindow
 	gdouble                 dock_ptr_overlay_y0;
 	guint                   dock_idle_source;
 
-	/* Wayland (!layer-shell): when TRUE, input region is dock-only so the mouse reaches
-	 * windows below the canvas; when FALSE, the canvas is included for reliable pen hits. */
+	/* Wayland: when TRUE, input region is dock-only so the mouse reaches windows below the
+	 * canvas; when FALSE, the canvas is included for reliable pen hits. */
 	gboolean                pass_mouse_through_canvas;
 
 	/* Compositor input region: mouse/touch hit the dock only unless the pen is
 	 * actively drawing (see annotations_input_region_apply). */
 	guint                   input_region_idle;
 
-	/* Wayland: coalesced gdk_toplevel_present when pass-through lets other windows activate. */
+	/* Wayland: coalesced idle when pass-through lets other windows activate (tick-only). */
 	guint                   wayland_restack_idle;
 
-	/* Wayland: one-shot idle to re-apply input region after present() (next main-loop turn). */
-	guint                   wayland_reapply_idle;
+	/* Wayland: coalesced gdk_toplevel_present when the overlay becomes active again. */
+	guint                   wayland_active_raise_idle;
+
+	/* Wayland: gtk_widget_add_tick_callback id for input re-apply after present (0 = none). */
+	guint                   wayland_reapply_tick_id;
 
 	/* Skip chaining another Wayland restack from apply() when apply is re-run after present(). */
 	gboolean                suppress_wayland_restack;
 
-	/* TRUE when using gtk4-layer-shell (Wayland wlr-layer-shell); else X11/maximized path. */
-	gboolean                stacking_layer_shell;
+	/* One-time toast about Wayland stacking when enabling pass-through. */
+	gboolean                pass_mouse_stacking_warn_shown;
+
+	/* AdwSwitchRow "Mouse through canvas"; NULL on X11 (toggle is Wayland-only). */
+	GtkWidget              *pass_mouse_switch_row;
+
+	/* Idle: turn off pass-through after losing activation (Wayland dock-only deadlock). */
+	guint                   pass_mouse_off_on_inactive_idle;
+
+	/* TRUE while turning pass-through off from pass_mouse_off_on_inactive idle (skip UI toast). */
+	gboolean                pass_mouse_unfocused_auto_off;
 };
 
 G_DEFINE_FINAL_TYPE (AnnotationsWindow, annotations_window, ADW_TYPE_APPLICATION_WINDOW)
+
+/* #region agent log */
+static void
+agent_debug_ndjson (const char *hypothesis_id,
+                    const char *location,
+                    const char *message,
+                    int          data_a,
+                    int          data_b)
+{
+	FILE *f;
+
+	f = fopen ("/home/eochis/Projects/annotations/.cursor/debug-9a4cda.log", "a");
+	if (f == NULL)
+		return;
+	fprintf (f,
+	         "{\"sessionId\":\"9a4cda\",\"hypothesisId\":\"%s\",\"location\":\"%s\",\"message\":\"%s\","
+	         "\"data\":{\"a\":%d,\"b\":%d},\"timestamp\":%" G_GINT64_FORMAT "}\n",
+	         hypothesis_id, location, message, data_a, data_b,
+	         (gint64) (g_get_real_time () / 1000));
+	fclose (f);
+}
+/* #endregion */
 
 static void
 anno_stroke_free (gpointer data)
@@ -166,11 +198,25 @@ annotations_window_dispose (GObject *object)
 		self->wayland_restack_idle = 0;
 	}
 
-	if (self->wayland_reapply_idle != 0)
+	if (self->wayland_active_raise_idle != 0)
 	{
-		g_source_remove (self->wayland_reapply_idle);
-		self->wayland_reapply_idle = 0;
+		g_source_remove (self->wayland_active_raise_idle);
+		self->wayland_active_raise_idle = 0;
 	}
+
+	if (self->wayland_reapply_tick_id != 0 && gtk_widget_get_realized (GTK_WIDGET (self)))
+	{
+		gtk_widget_remove_tick_callback (GTK_WIDGET (self), self->wayland_reapply_tick_id);
+		self->wayland_reapply_tick_id = 0;
+	}
+
+	if (self->pass_mouse_off_on_inactive_idle != 0)
+	{
+		g_source_remove (self->pass_mouse_off_on_inactive_idle);
+		self->pass_mouse_off_on_inactive_idle = 0;
+	}
+
+	self->pass_mouse_switch_row = NULL;
 
 	g_clear_pointer (&self->current_stroke, anno_stroke_free);
 	g_clear_pointer (&self->eraser_path, anno_stroke_free);
@@ -415,7 +461,12 @@ static void annotations_x11_net_wm_state_above (AnnotationsWindow *self);
 static void annotations_window_reassert_above (AnnotationsWindow *self);
 #if defined(GDK_WINDOWING_WAYLAND)
 static void annotations_wayland_schedule_restack (AnnotationsWindow *self);
-static gboolean annotations_wayland_reapply_input_idle_cb (gpointer user_data);
+static void annotations_wayland_schedule_active_raise (AnnotationsWindow *self);
+static gboolean annotations_wayland_input_reapply_tick_cb (GtkWidget     *widget,
+                                                            GdkFrameClock *frame_clock,
+                                                            gpointer       user_data);
+static gboolean annotations_wayland_active_raise_idle_cb (gpointer user_data);
+static gboolean annotations_pass_mouse_off_on_inactive_idle_cb (gpointer user_data);
 #endif
 static void on_window_mapped (GtkWidget *widget, gpointer user_data);
 static void on_notify_is_active (GObject *object, GParamSpec *pspec, gpointer user_data);
@@ -470,6 +521,11 @@ dock_idle_collapse_cb (gpointer user_data)
 	AnnotationsWindow *self = user_data;
 
 	self->dock_idle_source = 0;
+
+	/* Collapsing shrinks the dock to the chip (e.g. 26×26); pass-through input uses that
+	 * rectangle, so keep tools expanded while mouse-through is on. */
+	if (self->pass_mouse_through_canvas)
+		return G_SOURCE_REMOVE;
 
 	if (self->dock_gesture_dragging)
 	{
@@ -625,22 +681,50 @@ annotations_input_region_apply (AnnotationsWindow *self)
 	gboolean canvas_merged;
 
 	if (!gtk_widget_get_realized (GTK_WIDGET (self)))
+	{
+		/* #region agent log */
+		agent_debug_ndjson ("H1", "annotations-window.c:annotations_input_region_apply",
+		                    "early_unrealized", 0, 0);
+		/* #endregion */
 		return;
+	}
 
 	display = gtk_widget_get_display (GTK_WIDGET (self));
 	if (display == NULL || !gdk_display_supports_input_shapes (display))
+	{
+		/* #region agent log */
+		agent_debug_ndjson ("H2", "annotations-window.c:annotations_input_region_apply",
+		                    "no_input_shapes", display == NULL ? 1 : 0, 0);
+		/* #endregion */
 		return;
+	}
 
 	native = gtk_widget_get_native (GTK_WIDGET (self));
 	if (native == NULL)
+	{
+		/* #region agent log */
+		agent_debug_ndjson ("H2", "annotations-window.c:annotations_input_region_apply",
+		                    "no_native", 2, 0);
+		/* #endregion */
 		return;
+	}
 
 	surface = gtk_native_get_surface (native);
 	if (surface == NULL || gdk_surface_is_destroyed (surface))
+	{
+		/* #region agent log */
+		agent_debug_ndjson ("H2", "annotations-window.c:annotations_input_region_apply",
+		                    "no_surface", 3, 0);
+		/* #endregion */
 		return;
+	}
 
 	if (self->pen_down)
 	{
+		/* #region agent log */
+		agent_debug_ndjson ("H3", "annotations-window.c:annotations_input_region_apply",
+		                    "region_full_pen_down", 0, 0);
+		/* #endregion */
 		gdk_surface_set_input_region (surface, NULL);
 		annotations_surface_input_region_commit (surface);
 		/* Expanding the input region from dock-only to the full surface can make
@@ -651,6 +735,10 @@ annotations_input_region_apply (AnnotationsWindow *self)
 
 	if (!dock_input_rect_surface (self, surface, &dock_rect))
 	{
+		/* #region agent log */
+		agent_debug_ndjson ("H4", "annotations-window.c:annotations_input_region_apply",
+		                    "dock_rect_fail", self->pass_mouse_through_canvas ? 1 : 0, 0);
+		/* #endregion */
 		/* NULL = full-surface input and blocks pass-through; avoid that while waiting
 		 * for dock layout if the user asked for mouse-through. */
 		if (self->pass_mouse_through_canvas)
@@ -665,11 +753,11 @@ annotations_input_region_apply (AnnotationsWindow *self)
 
 	merge_canvas_wayland = FALSE;
 #if defined(GDK_WINDOWING_WAYLAND)
-	/* Without gtk4-layer-shell, GNOME Wayland often routes the stylus like the core
-	 * pointer. Unioning the canvas avoids stray presses on the window below; the user
-	 * can enable "Mouse through canvas" in the dock to use dock-only input instead. */
-	merge_canvas_wayland = !self->stacking_layer_shell && GDK_IS_WAYLAND_DISPLAY (display)
-	                       && !self->pass_mouse_through_canvas;
+	/* On GNOME Wayland the stylus is often routed like the core pointer. Unioning the canvas
+	 * avoids stray presses on the window below; the user can enable "Mouse through canvas"
+	 * in the dock to use dock-only input instead. */
+	merge_canvas_wayland = GDK_IS_WAYLAND_DISPLAY (display)
+	                      && !self->pass_mouse_through_canvas;
 #endif
 
 	region = cairo_region_create ();
@@ -682,19 +770,31 @@ annotations_input_region_apply (AnnotationsWindow *self)
 	cairo_region_destroy (region);
 	annotations_surface_input_region_commit (surface);
 
-#if defined(GDK_WINDOWING_WAYLAND)
-	/* Clicks pass through to clients below, which can take activation and raise above us;
-	 * nudge the compositor to keep this overlay stacked for annotation. */
-	if (!self->suppress_wayland_restack && !self->stacking_layer_shell
-	    && GDK_IS_WAYLAND_DISPLAY (display) && self->pass_mouse_through_canvas
-	    && !self->pen_down)
-		annotations_wayland_schedule_restack (self);
-#endif
+	/* #region agent log */
+	{
+		int a;
+
+		a = (merge_canvas_wayland ? 1 : 0) | (canvas_merged ? 2 : 0)
+		    | (self->pass_mouse_through_canvas ? 4 : 0);
+		agent_debug_ndjson ("H5", "annotations-window.c:annotations_input_region_apply",
+		                    "region_set", a, dock_rect.width);
+		agent_debug_ndjson ("H5", "annotations-window.c:annotations_input_region_apply",
+		                    "region_set_dock_h", dock_rect.height, 0);
+	}
+	/* #endregion */
+
+	/* Do not schedule Wayland gdk_toplevel_present from every apply: it resets the
+	 * compositor input region and breaks pass-through. Restack only from
+	 * notify::is-active when the overlay loses activation (see on_notify_is_active). */
 }
 
 static gboolean
 annotations_input_region_retry_cb (gpointer user_data)
 {
+	/* #region agent log */
+	agent_debug_ndjson ("H4", "annotations-window.c:annotations_input_region_retry_cb",
+	                    "retry_schedule", 0, 0);
+	/* #endregion */
 	annotations_input_region_schedule (ANNOTATIONS_WINDOW (user_data));
 	return G_SOURCE_REMOVE;
 }
@@ -727,26 +827,6 @@ annotations_input_region_schedule (AnnotationsWindow *self)
 static void
 annotations_window_setup_stacking (AnnotationsWindow *self)
 {
-	self->stacking_layer_shell = FALSE;
-
-#ifdef HAVE_GTK4_LAYER_SHELL
-	if (gtk_layer_is_supported ())
-	{
-		GtkWindow *win = GTK_WINDOW (self);
-
-		gtk_layer_init_for_window (win);
-		gtk_layer_set_namespace (win, "annotations");
-		gtk_layer_set_layer (win, GTK_LAYER_SHELL_LAYER_OVERLAY);
-		gtk_layer_set_exclusive_zone (win, 0);
-		gtk_layer_set_keyboard_mode (win, GTK_LAYER_SHELL_KEYBOARD_MODE_NONE);
-		gtk_layer_set_anchor (win, GTK_LAYER_SHELL_EDGE_TOP, TRUE);
-		gtk_layer_set_anchor (win, GTK_LAYER_SHELL_EDGE_BOTTOM, TRUE);
-		gtk_layer_set_anchor (win, GTK_LAYER_SHELL_EDGE_LEFT, TRUE);
-		gtk_layer_set_anchor (win, GTK_LAYER_SHELL_EDGE_RIGHT, TRUE);
-		self->stacking_layer_shell = TRUE;
-		return;
-	}
-#endif
 	gtk_window_maximize (GTK_WINDOW (self));
 }
 
@@ -806,9 +886,6 @@ annotations_window_reassert_above (AnnotationsWindow *self)
 {
 	GdkDisplay *d;
 
-	if (self->stacking_layer_shell)
-		return;
-
 	d = gtk_widget_get_display (GTK_WIDGET (self));
 	if (d == NULL)
 		return;
@@ -821,31 +898,49 @@ annotations_window_reassert_above (AnnotationsWindow *self)
 
 #if defined(GDK_WINDOWING_WAYLAND)
 static gboolean
-annotations_wayland_reapply_input_idle_cb (gpointer user_data)
+annotations_wayland_input_reapply_tick_cb (GtkWidget     *widget,
+                                            GdkFrameClock *frame_clock,
+                                            gpointer       user_data)
 {
 	AnnotationsWindow *self = user_data;
 
-	self->wayland_reapply_idle = 0;
+	(void) frame_clock;
 
-	if (self->stacking_layer_shell || !self->pass_mouse_through_canvas)
+	if (!self->pass_mouse_through_canvas)
+	{
+		/* #region agent log */
+		agent_debug_ndjson ("H6", "annotations-window.c:annotations_wayland_input_reapply_tick_cb",
+		                    "reapply_skip", 0,
+		                    self->pass_mouse_through_canvas ? 1 : 0);
+		/* #endregion */
+		self->wayland_reapply_tick_id = 0;
 		return G_SOURCE_REMOVE;
+	}
 
+	/* #region agent log */
+	agent_debug_ndjson ("H6", "annotations-window.c:annotations_wayland_input_reapply_tick_cb",
+	                    "reapply_after_paint", 0, 0);
+	/* #endregion */
 	self->suppress_wayland_restack = TRUE;
 	annotations_input_region_apply (self);
 	self->suppress_wayland_restack = FALSE;
+	self->wayland_reapply_tick_id = 0;
 	return G_SOURCE_REMOVE;
 }
 
 static gboolean
-annotations_wayland_restack_idle_cb (gpointer user_data)
+annotations_wayland_active_raise_idle_cb (gpointer user_data)
 {
 	AnnotationsWindow *self = user_data;
 	GtkNative *native;
 	GdkSurface *surface;
 
-	self->wayland_restack_idle = 0;
+	self->wayland_active_raise_idle = 0;
 
-	if (self->stacking_layer_shell || !self->pass_mouse_through_canvas)
+	if (!self->pass_mouse_through_canvas)
+		return G_SOURCE_REMOVE;
+
+	if (!gtk_window_is_active (GTK_WINDOW (self)))
 		return G_SOURCE_REMOVE;
 
 	native = gtk_widget_get_native (GTK_WIDGET (self));
@@ -859,8 +954,11 @@ annotations_wayland_restack_idle_cb (gpointer user_data)
 	if (!GDK_IS_WAYLAND_SURFACE (surface))
 		return G_SOURCE_REMOVE;
 
-	/* gdk_toplevel_present requires a non-NULL layout. It can reset the compositor
-	 * input region; re-apply dock-only on the *next* idle so it wins after the commit. */
+	/* #region agent log */
+	agent_debug_ndjson ("H7", "annotations-window.c:annotations_wayland_active_raise_idle_cb",
+	                    "active_raise_present", 0, 0);
+	/* #endregion */
+
 	{
 		g_autoptr (GdkToplevelLayout) layout = NULL;
 
@@ -869,9 +967,58 @@ annotations_wayland_restack_idle_cb (gpointer user_data)
 		gdk_toplevel_present (GDK_TOPLEVEL (surface), layout);
 	}
 
-	if (self->wayland_reapply_idle != 0)
-		g_source_remove (self->wayland_reapply_idle);
-	self->wayland_reapply_idle = g_idle_add (annotations_wayland_reapply_input_idle_cb, self);
+	gtk_window_present (GTK_WINDOW (self));
+
+	if (self->wayland_reapply_tick_id != 0)
+		gtk_widget_remove_tick_callback (GTK_WIDGET (self), self->wayland_reapply_tick_id);
+	self->wayland_reapply_tick_id = gtk_widget_add_tick_callback (
+		GTK_WIDGET (self), annotations_wayland_input_reapply_tick_cb, self, NULL);
+	return G_SOURCE_REMOVE;
+}
+
+static gboolean
+annotations_wayland_restack_idle_cb (gpointer user_data)
+{
+	AnnotationsWindow *self = user_data;
+	GtkNative *native;
+	GdkSurface *surface;
+
+	self->wayland_restack_idle = 0;
+
+	if (!self->pass_mouse_through_canvas)
+		return G_SOURCE_REMOVE;
+
+	native = gtk_widget_get_native (GTK_WIDGET (self));
+	if (native == NULL)
+		return G_SOURCE_REMOVE;
+
+	surface = gtk_native_get_surface (native);
+	if (surface == NULL || gdk_surface_is_destroyed (surface))
+		return G_SOURCE_REMOVE;
+
+	if (!GDK_IS_WAYLAND_SURFACE (surface))
+		return G_SOURCE_REMOVE;
+
+	/* #region agent log */
+	{
+		GdkToplevelState st;
+
+		st = gdk_toplevel_get_state (GDK_TOPLEVEL (surface));
+		agent_debug_ndjson ("H9", "annotations-window.c:annotations_wayland_restack_idle_cb",
+		                    "inactive_toplevel_state", (int) st, 0);
+	}
+	agent_debug_ndjson ("H7", "annotations-window.c:annotations_wayland_restack_idle_cb",
+	                    "restack_tick_only", 0, 0);
+	/* #endregion */
+
+	/* Do not call gdk_toplevel_present here: after another client activates, re-presenting
+	 * this maximized toplevel does not raise it on Mutter and can worsen stacking. Input
+	 * shape still needs a post-layout refresh — use the same tick re-apply as after present. */
+
+	if (self->wayland_reapply_tick_id != 0)
+		gtk_widget_remove_tick_callback (GTK_WIDGET (self), self->wayland_reapply_tick_id);
+	self->wayland_reapply_tick_id = gtk_widget_add_tick_callback (
+		GTK_WIDGET (self), annotations_wayland_input_reapply_tick_cb, self, NULL);
 	return G_SOURCE_REMOVE;
 }
 
@@ -880,7 +1027,7 @@ annotations_wayland_schedule_restack (AnnotationsWindow *self)
 {
 	GdkDisplay *d;
 
-	if (self->stacking_layer_shell || !self->pass_mouse_through_canvas)
+	if (!self->pass_mouse_through_canvas)
 		return;
 
 	d = gtk_widget_get_display (GTK_WIDGET (self));
@@ -890,7 +1037,72 @@ annotations_wayland_schedule_restack (AnnotationsWindow *self)
 	if (self->wayland_restack_idle != 0)
 		return;
 
+	/* #region agent log */
+	agent_debug_ndjson ("H7", "annotations-window.c:annotations_wayland_schedule_restack",
+	                    "schedule_restack", 0, 0);
+	/* #endregion */
 	self->wayland_restack_idle = g_idle_add (annotations_wayland_restack_idle_cb, self);
+}
+
+static void
+annotations_wayland_schedule_active_raise (AnnotationsWindow *self)
+{
+	GdkDisplay *d;
+
+	if (!self->pass_mouse_through_canvas)
+		return;
+
+	d = gtk_widget_get_display (GTK_WIDGET (self));
+	if (d == NULL || !GDK_IS_WAYLAND_DISPLAY (d))
+		return;
+
+	if (self->wayland_active_raise_idle != 0)
+		return;
+
+	/* #region agent log */
+	agent_debug_ndjson ("H7", "annotations-window.c:annotations_wayland_schedule_active_raise",
+	                    "schedule_active_raise", 0, 0);
+	/* #endregion */
+	self->wayland_active_raise_idle = g_idle_add (annotations_wayland_active_raise_idle_cb, self);
+}
+
+static gboolean
+annotations_pass_mouse_off_on_inactive_idle_cb (gpointer user_data)
+{
+	AnnotationsWindow *self = user_data;
+	GdkDisplay *d;
+
+	self->pass_mouse_off_on_inactive_idle = 0;
+
+	if (gtk_window_is_active (GTK_WINDOW (self)))
+		return G_SOURCE_REMOVE;
+
+	if (!self->pass_mouse_through_canvas || self->pass_mouse_switch_row == NULL)
+		return G_SOURCE_REMOVE;
+
+	d = gtk_widget_get_display (GTK_WIDGET (self));
+	if (d == NULL || !GDK_IS_WAYLAND_DISPLAY (d))
+		return G_SOURCE_REMOVE;
+
+	/* #region agent log */
+	agent_debug_ndjson ("H10", "annotations-window.c:annotations_pass_mouse_off_on_inactive_idle_cb",
+	                    "pass_mouse_auto_off_inactive", 0, 0);
+	/* #endregion */
+
+	self->pass_mouse_unfocused_auto_off = TRUE;
+	adw_switch_row_set_active (ADW_SWITCH_ROW (self->pass_mouse_switch_row), FALSE);
+
+	{
+		AdwToast *toast;
+
+		toast = adw_toast_new (
+			_("Mouse-through was turned off because focus left this window. "
+			  "Turn it on again after returning here if you need more clicks through the canvas."));
+		adw_toast_set_timeout (toast, 5);
+		adw_toast_overlay_add_toast (self->toast_overlay, toast);
+	}
+
+	return G_SOURCE_REMOVE;
 }
 #endif
 
@@ -898,13 +1110,29 @@ static void
 on_window_mapped (GtkWidget *widget, gpointer user_data)
 {
 	AnnotationsWindow *self = user_data;
+	GdkDisplay *gdisp;
+	int backend;
 
 	(void) widget;
 
-#if defined(GDK_WINDOWING_X11)
-	if (!self->stacking_layer_shell)
-		annotations_x11_net_wm_state_above (self);
+	gdisp = gtk_widget_get_display (GTK_WIDGET (self));
+	backend = 0;
+	if (gdisp != NULL)
+	{
+		if (GDK_IS_X11_DISPLAY (gdisp))
+			backend = 1;
+#if defined(GDK_WINDOWING_WAYLAND)
+		else if (GDK_IS_WAYLAND_DISPLAY (gdisp))
+			backend = 2;
 #endif
+	}
+	/* #region agent log */
+	agent_debug_ndjson ("H0", "annotations-window.c:on_window_mapped", "map",
+	                    backend,
+	                    (gdisp != NULL && gdk_display_supports_input_shapes (gdisp)) ? 1 : 0);
+	/* #endregion */
+
+	annotations_window_reassert_above (self);
 	annotations_input_region_schedule (self);
 }
 
@@ -916,15 +1144,48 @@ on_notify_is_active (GObject *object, GParamSpec *pspec, gpointer user_data)
 	(void) pspec;
 	(void) user_data;
 
+	/* #region agent log */
+	agent_debug_ndjson ("H8", "annotations-window.c:on_notify_is_active",
+	                    "is_active_notify",
+	                    gtk_window_is_active (GTK_WINDOW (self)) ? 1 : 0,
+	                    self->pass_mouse_through_canvas ? 1 : 0);
+	/* #endregion */
+
 	if (gtk_window_is_active (GTK_WINDOW (self)))
+	{
+#if defined(GDK_WINDOWING_WAYLAND)
+		if (self->pass_mouse_off_on_inactive_idle != 0)
+		{
+			g_source_remove (self->pass_mouse_off_on_inactive_idle);
+			self->pass_mouse_off_on_inactive_idle = 0;
+		}
+		if (self->pass_mouse_through_canvas)
+		{
+			GdkDisplay *d = gtk_widget_get_display (GTK_WIDGET (self));
+
+			if (d != NULL && GDK_IS_WAYLAND_DISPLAY (d))
+				annotations_wayland_schedule_active_raise (self);
+		}
+#endif
 		return;
-	if (!self->pass_mouse_through_canvas || self->stacking_layer_shell)
+	}
+	if (!self->pass_mouse_through_canvas)
 		return;
 
 #if defined(GDK_WINDOWING_WAYLAND)
 	{
 		GdkDisplay *d = gtk_widget_get_display (GTK_WIDGET (self));
 
+		if (d != NULL && GDK_IS_WAYLAND_DISPLAY (d) && self->pass_mouse_switch_row != NULL
+		    && self->pass_mouse_off_on_inactive_idle == 0)
+			self->pass_mouse_off_on_inactive_idle =
+				g_idle_add (annotations_pass_mouse_off_on_inactive_idle_cb, self);
+
+		/* #region agent log */
+		agent_debug_ndjson ("H7", "annotations-window.c:on_notify_is_active",
+		                    "inactive_restack", d != NULL && GDK_IS_WAYLAND_DISPLAY (d) ? 1 : 0,
+		                    0);
+		/* #endregion */
 		if (d != NULL && GDK_IS_WAYLAND_DISPLAY (d))
 			annotations_wayland_schedule_restack (self);
 	}
@@ -1178,18 +1439,31 @@ on_pass_mouse_through_active_notify (GObject *object, GParamSpec *pspec, gpointe
 	AdwSwitchRow *sr = ADW_SWITCH_ROW (object);
 	gboolean on;
 	gboolean was;
+	gboolean auto_off;
 
 	(void) pspec;
 	was = self->pass_mouse_through_canvas;
 	on = adw_switch_row_get_active (sr);
 	self->pass_mouse_through_canvas = on;
 
+	auto_off = self->pass_mouse_unfocused_auto_off;
+	if (auto_off)
+		self->pass_mouse_unfocused_auto_off = FALSE;
+
+	/* #region agent log */
+	agent_debug_ndjson ("H5", "annotations-window.c:on_pass_mouse_through_active_notify",
+	                    "pass_mouse_toggle", on ? 1 : 0, was ? 1 : 0);
+	/* #endregion */
+
+	if (on)
+		dock_open_tools (self);
+
 	adw_action_row_set_subtitle (ADW_ACTION_ROW (sr),
 	                             on
-	                             ? _("Mouse clicks pass through the canvas. Turn off if the pen misses.")
+	                             ? _("Mouse reaches windows below; clicking them raises them above this overlay. Turn off if the pen misses.")
 	                             : _("Canvas captures input for reliable pen strokes."));
 
-	if (was != on)
+	if (was != on && !auto_off)
 	{
 		AdwToast *toast;
 
@@ -1200,8 +1474,45 @@ on_pass_mouse_through_active_notify (GObject *object, GParamSpec *pspec, gpointe
 		adw_toast_overlay_add_toast (self->toast_overlay, toast);
 	}
 
+#if defined(GDK_WINDOWING_WAYLAND)
+	if (was != on && on && !self->pass_mouse_stacking_warn_shown)
+	{
+		GdkDisplay *d = gtk_widget_get_display (GTK_WIDGET (self));
+
+		if (d != NULL && GDK_IS_WAYLAND_DISPLAY (d))
+		{
+			AdwToast *stw;
+
+			self->pass_mouse_stacking_warn_shown = TRUE;
+			stw = adw_toast_new (
+				_("On Wayland, windows you focus can stack above this overlay. "
+				  "Optional: ANNOTATIONS_PREFER_X11=1 for stronger stacking on some setups (see main.c)."));
+			adw_toast_set_timeout (stw, 6);
+			adw_toast_overlay_add_toast (self->toast_overlay, stw);
+		}
+	}
+#endif
+
 	/* Idle so we avoid re-entering surface updates during the notify emission. */
 	annotations_input_region_schedule (self);
+
+#if defined(GDK_WINDOWING_WAYLAND)
+	/* Coalesced Wayland restack idle re-applies the input region on a frame tick after
+	 * pass-through toggles (see annotations_wayland_restack_idle_cb). */
+	if (was != on && on)
+	{
+		GdkDisplay *d = gtk_widget_get_display (GTK_WIDGET (self));
+
+		if (d != NULL && GDK_IS_WAYLAND_DISPLAY (d))
+		{
+			/* #region agent log */
+			agent_debug_ndjson ("H7", "annotations-window.c:on_pass_mouse_through_active_notify",
+			                    "pass_mouse_enable_restack", 0, 0);
+			/* #endregion */
+			annotations_wayland_schedule_active_raise (self);
+		}
+	}
+#endif
 }
 
 static void
@@ -1293,8 +1604,7 @@ setup_floating_dock (AnnotationsWindow *self)
 	{
 		GdkDisplay *disp = gtk_widget_get_display (GTK_WIDGET (self));
 
-		show_mouse_through_toggle = disp != NULL && GDK_IS_WAYLAND_DISPLAY (disp)
-		                            && !self->stacking_layer_shell;
+		show_mouse_through_toggle = disp != NULL && GDK_IS_WAYLAND_DISPLAY (disp);
 	}
 #else
 # define show_mouse_through_toggle FALSE
@@ -1316,11 +1626,14 @@ setup_floating_dock (AnnotationsWindow *self)
 			  "Turn off for the most reliable pen input on Wayland."));
 		adw_switch_row_set_active (ADW_SWITCH_ROW (sw_row), FALSE);
 		gtk_box_append (GTK_BOX (outer_expanded), sw_row);
+		self->pass_mouse_switch_row = sw_row;
 		g_signal_connect_data (sw_row, "notify::active",
 		                       G_CALLBACK (on_pass_mouse_through_active_notify),
 		                       self, NULL,
 		                       G_CONNECT_AFTER);
 	}
+	else
+		self->pass_mouse_switch_row = NULL;
 
 	clear_box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
 	gtk_widget_add_css_class (clear_box, "anno-clear-zone");

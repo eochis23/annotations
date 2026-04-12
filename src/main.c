@@ -41,9 +41,12 @@ main (int   argc,
 	bind_textdomain_codeset (GETTEXT_PACKAGE, "UTF-8");
 	textdomain (GETTEXT_PACKAGE);
 
-	/* Optional: ANNOTATIONS_PREFER_X11=1 tries X11 (XWayland) first so _NET_WM_STATE_ABOVE
-	 * can stick on some setups; it often breaks Gdk input-shape pass-through to native
-	 * Wayland clients, so it is not the default. Set GDK_BACKEND explicitly if needed. */
+	/* Wayland overlay stacking is limited for a normal xdg_toplevel. Optional approaches:
+	 * - ANNOTATIONS_PREFER_X11=1: prefer X11/XWayland so _NET_WM_STATE_ABOVE can apply; can
+	 *   weaken Gdk input-shape pass-through to native Wayland clients underneath.
+	 * - GDK_BACKEND=x11: force a pure X11 session when you use a nested X server.
+	 * - Run inside a nested Wayland compositor (e.g. cage, Weston) if you need different
+	 *   shell protocols for experiments. */
 #if defined(GDK_WINDOWING_X11)
 	if (g_getenv ("GDK_BACKEND") == NULL && g_getenv ("ANNOTATIONS_PREFER_X11") != NULL)
 		gdk_set_allowed_backends ("x11,wayland,*");
