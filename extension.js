@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
+import GLib from 'gi://GLib';
 import GObject from 'gi://GObject';
 import Meta from 'gi://Meta';
 import Shell from 'gi://Shell';
@@ -14,6 +15,18 @@ import { OverlaySession } from './lib/overlaySession.js';
 import { StrokeModel } from './lib/strokes.js';
 
 const KB_NAME = 'annotations-toggle-draw';
+
+function actionModesForOverlay() {
+    const AM = Shell.ActionMode;
+    let m = AM.NORMAL | AM.OVERVIEW;
+    if (AM.POPUP !== undefined)
+        m |= AM.POPUP;
+    if (AM.MESSAGE_TRAY !== undefined)
+        m |= AM.MESSAGE_TRAY;
+    if (AM.ALL !== undefined)
+        m = AM.ALL;
+    return m;
+}
 
 const Indicator = GObject.registerClass(
 class Indicator extends PanelMenu.Button {
@@ -62,22 +75,47 @@ export default class AnnotationsExtension extends Extension {
 
         this._overlay = new OverlaySession(this, this._strokeModel);
 
-        Main.wm.addKeybinding(
-            KB_NAME,
-            this._settings,
-            'toggle-overlay',
-            Meta.KeyBindingFlags.NONE,
-            Shell.ActionMode.NORMAL | Shell.ActionMode.OVERVIEW,
-            () => {
-                this.toggleDrawingOverlay();
-            });
+        /* Empty accelerator if schema was not recompiled after upgrade — reset so WM binds. */
+        try {
+            const acc = this._settings.get_strv('toggle-overlay');
+            if (!acc || acc.length === 0 || (acc.length === 1 && !acc[0]))
+                this._settings.reset('toggle-overlay');
+        } catch (e) {
+            log(`annotations: toggle-overlay key missing, reset schema: ${e}`);
+        }
+
+        this._kbIdle = GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+            this._kbIdle = 0;
+            try {
+                Main.wm.addKeybinding(
+                    KB_NAME,
+                    this._settings,
+                    'toggle-overlay',
+                    Meta.KeyBindingFlags.NONE,
+                    actionModesForOverlay(),
+                    () => {
+                        this.toggleDrawingOverlay();
+                    });
+            } catch (e) {
+                logError(e, 'annotations addKeybinding');
+            }
+            return GLib.SOURCE_REMOVE;
+        });
 
         this._indicator = new Indicator(this);
         Main.panel.addToStatusArea(this.uuid, this._indicator);
     }
 
     disable() {
-        Main.wm.removeKeybinding(KB_NAME);
+        if (this._kbIdle) {
+            GLib.source_remove(this._kbIdle);
+            this._kbIdle = 0;
+        }
+        try {
+            Main.wm.removeKeybinding(KB_NAME);
+        } catch (e) {
+            log(`annotations removeKeybinding: ${e}`);
+        }
 
         if (this._overlay) {
             this._overlay.destroy();

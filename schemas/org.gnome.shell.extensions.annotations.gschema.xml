@@ -2,8 +2,9 @@
 <schemalist>
   <schema id="org.gnome.shell.extensions.annotations" path="/org/gnome/shell/extensions/annotations/">
     <key name="toggle-overlay" type="as">
-      <default><![CDATA[['<Super><Shift>a']]]></default>
+      <default><![CDATA[['<Super><Alt>a']]]></default>
       <summary>Keyboard shortcut to show or hide the drawing layer</summary>
+      <description>Default uses Alt to avoid clashes with Super+Shift+A on some distros. Recompile schemas after upgrades; reset the key if the shortcut stops working.</description>
     </key>
     <key name="movement-sync" type="b">
       <default>false</default>
