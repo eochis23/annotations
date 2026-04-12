@@ -1,0 +1,3 @@
+[D-BUS Service]
+Name=com.github.eochis23.annotations
+Exec=@bindir@/annotations --gapplication-service

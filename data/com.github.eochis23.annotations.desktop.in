@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=annotations
+Exec=annotations
+Icon=com.github.eochis23.annotations
+Terminal=false
+Type=Application
+Categories=Utility;
+Keywords=GTK;
+StartupNotify=true
+DBusActivatable=true
