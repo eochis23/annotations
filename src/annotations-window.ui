@@ -7,30 +7,38 @@
     <property name="default-width">800</property>
     <property name="default-height">600</property>
     <property name="content">
-      <object class="AdwToastOverlay" id="toast_overlay">
-        <property name="child">
-          <object class="AdwToolbarView">
-            <child type="top">
-              <object class="AdwHeaderBar">
-                <child type="end">
-                  <object class="GtkMenuButton">
-                    <property name="primary">True</property>
-                    <property name="icon-name">open-menu-symbolic</property>
-                    <property name="tooltip-text" translatable="yes">Main Menu</property>
-                    <property name="menu-model">primary_menu</property>
+      <object class="GtkOverlay" id="content_overlay">
+        <property name="hexpand">True</property>
+        <property name="vexpand">True</property>
+        <child>
+          <object class="AdwToastOverlay" id="toast_overlay">
+            <property name="hexpand">True</property>
+            <property name="vexpand">True</property>
+            <property name="child">
+              <object class="AdwToolbarView">
+                <child type="top">
+                  <object class="AdwHeaderBar" id="main_header">
+                    <child type="end">
+                      <object class="GtkMenuButton">
+                        <property name="primary">True</property>
+                        <property name="icon-name">open-menu-symbolic</property>
+                        <property name="tooltip-text" translatable="yes">Main Menu</property>
+                        <property name="menu-model">primary_menu</property>
+                      </object>
+                    </child>
                   </object>
                 </child>
-              </object>
-            </child>
-            <property name="content">
-              <object class="GtkDrawingArea" id="canvas">
-                <property name="vexpand">True</property>
-                <property name="hexpand">True</property>
-                <property name="can-focus">True</property>
+                <property name="content">
+                  <object class="GtkDrawingArea" id="canvas">
+                    <property name="vexpand">True</property>
+                    <property name="hexpand">True</property>
+                    <property name="can-focus">True</property>
+                  </object>
+                </property>
               </object>
             </property>
           </object>
-        </property>
+        </child>
       </object>
     </property>
   </template>

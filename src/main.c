@@ -26,6 +26,7 @@
 #include "config.h"
 
 #include <glib/gi18n.h>
+#include <gdk/gdk.h>
 
 #include "annotations-application.h"
 
@@ -39,6 +40,14 @@ main (int   argc,
 	bindtextdomain (GETTEXT_PACKAGE, LOCALEDIR);
 	bind_textdomain_codeset (GETTEXT_PACKAGE, "UTF-8");
 	textdomain (GETTEXT_PACKAGE);
+
+	/* Optional: ANNOTATIONS_PREFER_X11=1 tries X11 (XWayland) first so _NET_WM_STATE_ABOVE
+	 * can stick on some setups; it often breaks Gdk input-shape pass-through to native
+	 * Wayland clients, so it is not the default. Set GDK_BACKEND explicitly if needed. */
+#if defined(GDK_WINDOWING_X11)
+	if (g_getenv ("GDK_BACKEND") == NULL && g_getenv ("ANNOTATIONS_PREFER_X11") != NULL)
+		gdk_set_allowed_backends ("x11,wayland,*");
+#endif
 
 	app = annotations_application_new ("com.github.eochis23.annotations", G_APPLICATION_DEFAULT_FLAGS);
 	ret = g_application_run (G_APPLICATION (app), argc, argv);
