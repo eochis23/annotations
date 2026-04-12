@@ -32,7 +32,7 @@ You should see a **tablet** status icon.
 ### Drawing on screen
 
 1. Open the tablet menu → **Toggle drawing layer**, or press **Super+Alt+A** (default; avoids clashes with **Super+Shift+A** on some setups). Change via `gsettings` / dconf key `toggle-overlay`, then restart the extension or session.
-2. Use a **pen or tablet** (pressure supported). **Mouse does not draw** (stylus-like devices only).
+2. Draw with **mouse, pen, or tablet** (pressure when available). **Right or middle button** erases.
 3. **Dock** (top-left): color swatches and **Clear all**. **Eraser**: stylus barrel / right or middle button while inking.
 4. Toggle the layer off again when you need to click through to apps (the overlay captures the pointer while visible).
 

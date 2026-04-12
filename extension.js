@@ -14,7 +14,8 @@ import { MotionSyncService } from './lib/motionSync.js';
 import { OverlaySession } from './lib/overlaySession.js';
 import { StrokeModel } from './lib/strokes.js';
 
-const KB_NAME = 'annotations-toggle-draw';
+/** Must match the `as` accelerator key in our gschema (Meta reads it from `settings`). */
+const KEYBINDING_SCHEMA_KEY = 'toggle-overlay';
 
 function actionModesForOverlay() {
     const AM = Shell.ActionMode;
@@ -88,9 +89,8 @@ export default class AnnotationsExtension extends Extension {
             this._kbIdle = 0;
             try {
                 Main.wm.addKeybinding(
-                    KB_NAME,
+                    KEYBINDING_SCHEMA_KEY,
                     this._settings,
-                    'toggle-overlay',
                     Meta.KeyBindingFlags.NONE,
                     actionModesForOverlay(),
                     () => {
@@ -112,7 +112,7 @@ export default class AnnotationsExtension extends Extension {
             this._kbIdle = 0;
         }
         try {
-            Main.wm.removeKeybinding(KB_NAME);
+            Main.wm.removeKeybinding(KEYBINDING_SCHEMA_KEY);
         } catch (e) {
             log(`annotations removeKeybinding: ${e}`);
         }
