@@ -12,7 +12,7 @@ export default class AnnotationPrefs extends ExtensionPreferences {
         const drawGrp = new Adw.PreferencesGroup({
             title: _('Drawing layer'),
             description: _(
-                'Use the panel menu “Toggle drawing layer”, or the keyboard shortcut from GSettings key toggle-overlay (default: Super+Alt+A). Mouse, pen, and tablet draw; right or middle button erases.'),
+                'Use the panel menu “Toggle drawing layer”, or the keyboard shortcut from GSettings key toggle-overlay (default: Super+Alt+A). While the layer is on, only a pen or tablet tool draws on the canvas; the mouse and touch go to windows underneath. The dock (swatches, Clear) still works with the mouse. Right or middle button erases when using the pen.'),
         });
         page.add(drawGrp);
 

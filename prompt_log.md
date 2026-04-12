@@ -125,3 +125,9 @@ I don't see any errors, but nothing is drawing. Which section of the code should
 ## 14
 
 Let's have debugging messages inside those functions so we can see exactly what's going on. Add print statements with relevant info
+
+---
+
+## 15
+
+Let's work on the next step in the plan. I want you to make sure that when the annotation layer is open, only the pen can interact with it and that everything else interacts with the rest of the desktop like normal
