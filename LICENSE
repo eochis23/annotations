@@ -1,0 +1,13 @@
+SPDX-License-Identifier: GPL-2.0-or-later
+
+The GNOME Shell extension in this repository (metadata.json, extension.js,
+stylesheet.css, and related extension assets) is licensed under the GNU
+General Public License v2.0 or later.
+
+The full text of the GNU General Public License version 2 is available at:
+https://www.gnu.org/licenses/old-licenses/gpl-2.0.html
+
+---
+
+The previous GTK application was moved to legacy/gtk-application/ and
+retains its MIT license (see legacy/gtk-application/COPYING).

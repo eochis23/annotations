@@ -1,0 +1,9 @@
+{
+  "uuid": "annotations@eochis23.github.io",
+  "name": "Screen Annotations",
+  "description": "Pen annotations over the desktop (GNOME Shell extension; replaces the standalone GTK prototype).",
+  "version": 1,
+  "shell-version": ["45", "46", "47", "48"],
+  "url": "https://github.com/eochis23/annotations",
+  "session-modes": ["user"]
+}

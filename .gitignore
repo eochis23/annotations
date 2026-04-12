@@ -1,0 +1,4 @@
+*.shell-extension.zip
+build/
+builddir/
+.cursor/
