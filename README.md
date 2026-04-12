@@ -27,7 +27,16 @@ Enable from *Extensions* or:
 gnome-extensions enable annotations@eochis23.github.io
 ```
 
-You should see a **tablet** status icon. Open the menu for **Preferences** or **Run synthetic motion test** (requires the native helper built—see below).
+You should see a **tablet** status icon.
+
+### Drawing on screen
+
+1. Open the tablet menu → **Toggle drawing layer**, or press **Super+Shift+A** (default; change in Preferences / `toggle-overlay` in GSettings).
+2. Use a **pen or tablet** (pressure supported). **Mouse does not draw** (stylus-like devices only).
+3. **Dock** (top-left): color swatches and **Clear all**. **Eraser**: stylus barrel / right or middle button while inking.
+4. Toggle the layer off again when you need to click through to apps (the overlay captures the pointer while visible).
+
+After changing code, recompile schemas if `gschema.xml` changed, then disable/enable the extension or log out/in.
 
 ## Native motion helper (`anno-motion`)
 

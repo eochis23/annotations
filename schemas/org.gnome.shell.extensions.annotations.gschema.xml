@@ -1,6 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <schemalist>
   <schema id="org.gnome.shell.extensions.annotations" path="/org/gnome/shell/extensions/annotations/">
+    <key name="toggle-overlay" type="as">
+      <default><![CDATA[['<Super><Shift>a']]]></default>
+      <summary>Keyboard shortcut to show or hide the drawing layer</summary>
+    </key>
     <key name="movement-sync" type="b">
       <default>false</default>
       <summary>Content movement sync</summary>

@@ -1,1 +1,32 @@
-/* Placeholder: dock and overlay styling will land with the drawing UI. */
+/* Fullscreen overlay: visually transparent; input hits canvas + dock while visible */
+.anno-overlay-root {
+  background-color: transparent;
+}
+
+.anno-dock {
+  padding: 8px;
+  border-radius: 10px;
+  spacing: 6px;
+  background-color: rgba(36, 36, 36, 0.88);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+}
+
+.anno-dock-swatches {
+  spacing: 6px;
+}
+
+.anno-swatch {
+  border: 1px solid rgba(255, 255, 255, 0.22);
+}
+
+.anno-swatch-selected {
+  outline: 2px solid #3584e4;
+  outline-offset: 2px;
+}
+
+.anno-dock-clear {
+  padding: 6px 10px;
+  border-radius: 8px;
+  color: #f66151;
+  font-weight: 600;
+}

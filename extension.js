@@ -1,5 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 import GObject from 'gi://GObject';
+import Meta from 'gi://Meta';
+import Shell from 'gi://Shell';
 import St from 'gi://St';
 
 import { Extension, gettext as _ } from 'resource:///org/gnome/shell/extensions/extension.js';
@@ -8,7 +10,10 @@ import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 
 import { MotionSyncService } from './lib/motionSync.js';
+import { OverlaySession } from './lib/overlaySession.js';
 import { StrokeModel } from './lib/strokes.js';
+
+const KB_NAME = 'annotations-toggle-draw';
 
 const Indicator = GObject.registerClass(
 class Indicator extends PanelMenu.Button {
@@ -23,6 +28,12 @@ class Indicator extends PanelMenu.Button {
             icon_name: 'input-tablet-symbolic',
             style_class: 'system-status-icon',
         }));
+
+        const toggleItem = new PopupMenu.PopupMenuItem(_('Toggle drawing layer'));
+        toggleItem.connect('activate', () => {
+            ext.toggleDrawingOverlay();
+        });
+        this.menu.addMenuItem(toggleItem);
 
         const prefsItem = new PopupMenu.PopupMenuItem(_('Preferences'));
         prefsItem.connect('activate', () => {
@@ -44,15 +55,35 @@ class Indicator extends PanelMenu.Button {
 
 export default class AnnotationsExtension extends Extension {
     enable() {
+        this._settings = this.getSettings();
         this._strokeModel = new StrokeModel();
         this._motion = new MotionSyncService(this, this._strokeModel);
         this._motion.enable();
+
+        this._overlay = new OverlaySession(this, this._strokeModel);
+
+        Main.wm.addKeybinding(
+            KB_NAME,
+            this._settings,
+            'toggle-overlay',
+            Meta.KeyBindingFlags.NONE,
+            Shell.ActionMode.NORMAL | Shell.ActionMode.OVERVIEW,
+            () => {
+                this.toggleDrawingOverlay();
+            });
 
         this._indicator = new Indicator(this);
         Main.panel.addToStatusArea(this.uuid, this._indicator);
     }
 
     disable() {
+        Main.wm.removeKeybinding(KB_NAME);
+
+        if (this._overlay) {
+            this._overlay.destroy();
+            this._overlay = null;
+        }
+
         if (this._motion) {
             this._motion.disable();
             this._motion = null;
@@ -63,6 +94,11 @@ export default class AnnotationsExtension extends Extension {
             this._indicator.destroy();
             this._indicator = null;
         }
+    }
+
+    toggleDrawingOverlay() {
+        if (this._overlay)
+            this._overlay.toggle();
     }
 
     /** Menu action: exercise C matcher + translateAll on the in-memory stroke model. */

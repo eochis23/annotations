@@ -22,6 +22,7 @@ pack: schemas native
 	  --extra-source=lib/devices.js \
 	  --extra-source=lib/motionClient.js \
 	  --extra-source=lib/motionSync.js \
+	  --extra-source=lib/overlaySession.js \
 	  --extra-source=schemas/gschemas.compiled \
 	  --extra-source=schemas/org.gnome.shell.extensions.annotations.gschema.xml \
 	  --extra-source=bin/anno-motion \
