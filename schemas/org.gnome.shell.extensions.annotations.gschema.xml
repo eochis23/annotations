@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.annotations" path="/org/gnome/shell/extensions/annotations/">
+    <key name="movement-sync" type="b">
+      <default>false</default>
+      <summary>Content movement sync</summary>
+      <description>When enabled and consent is given, the extension may run the native ROI matcher (bounded rate) to translate ink.</description>
+    </key>
+    <key name="movement-consent-roi" type="b">
+      <default>false</default>
+      <summary>Consent to ROI capture</summary>
+      <description>Allow capturing small greyscale regions for motion estimation. No full-screen capture without this consent.</description>
+    </key>
+    <key name="movement-confidence-threshold" type="d">
+      <range min="0" max="1"/>
+      <default>0.45</default>
+      <summary>Minimum confidence to apply translation</summary>
+    </key>
+    <key name="movement-max-hz" type="i">
+      <range min="1" max="20"/>
+      <default>4</default>
+      <summary>Maximum motion matcher invocations per second</summary>
+    </key>
+  </schema>
+</schemalist>

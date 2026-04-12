@@ -2,3 +2,6 @@
 build/
 builddir/
 .cursor/
+native/build/
+native/builddir/
+bin/anno-motion

@@ -14,32 +14,46 @@ The old **GTK / libadwaita** app lives under [`legacy/gtk-application/`](legacy/
 The extension UUID is **`annotations@eochis23.github.io`**. The folder you install **must** use that exact name.
 
 ```bash
+mkdir -p ~/.local/share/gnome-shell/extensions
+glib-compile-schemas schemas/
 ln -sf "$(pwd)" ~/.local/share/gnome-shell/extensions/annotations@eochis23.github.io
-# Log out and back in, or Alt+F2 → r (X11 only) to reload Shell on unsupported reload paths use restart session
 ```
 
-Then enable **Screen Annotations** in *Extensions* or:
+Then **log out and back in** (Wayland) or restart GNOME Shell so schemas and the extension load.
+
+Enable from *Extensions* or:
 
 ```bash
 gnome-extensions enable annotations@eochis23.github.io
 ```
 
-You should see a **tablet** status icon and a one-time notification on enable.
+You should see a **tablet** status icon. Open the menu for **Preferences** or **Run synthetic motion test** (requires the native helper built—see below).
+
+## Native motion helper (`anno-motion`)
+
+The C helper compares two raw **grey8** buffers (`width × height` bytes) and prints JSON `{"dx","dy","c","mse"}`.
+
+```bash
+meson setup native/build && meson compile -C native/build
+python3 native/test-scroll.py   # sanity check
+```
+
+`lib/motionClient.js` looks for `bin/anno-motion` first, then `native/build/anno-motion`.
 
 ## Pack a zip
 
 ```bash
-gnome-extensions pack --force --extra-source=stylesheet.css .
-# produces annotations@eochis23.github.io.shell-extension.zip
+make pack
+# or see docs/packaging-ego-native.md for gnome-extensions pack flags
 ```
 
-## Roadmap (see `docs/shell-extension-input.md`)
+## Roadmap (see `docs/`)
 
-1. Phase 0: layer tree + input model spikes on target Shell versions.
-2. Phase 1: fullscreen Clutter overlay, multi-monitor.
-3. Phase 2: Cairo stroke engine, eraser, clear.
-4. Phase 3: floating dock, keybindings.
-5. Phase 4: extensions.gnome.org packaging.
+- [`docs/shell-extension-input.md`](docs/shell-extension-input.md) — overlay input notes.
+- [`docs/content-movement-spike.md`](docs/content-movement-spike.md) — AT-SPI vs ROI vs compositor signals.
+- [`docs/packaging-ego-native.md`](docs/packaging-ego-native.md) — EGO vs self-host when shipping `anno-motion`.
+
+Shell overlay + full drawing UI: still to be built on top of this scaffold.
 
 ## License
 

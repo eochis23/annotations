@@ -2,8 +2,10 @@
   "uuid": "annotations@eochis23.github.io",
   "name": "Screen Annotations",
   "description": "Pen annotations over the desktop (GNOME Shell extension; replaces the standalone GTK prototype).",
-  "version": 1,
-  "shell-version": ["45", "46", "47", "48"],
+  "version": 2,
+  "shell-version": ["45", "46", "47", "48", "49"],
   "url": "https://github.com/eochis23/annotations",
-  "session-modes": ["user"]
+  "session-modes": ["user"],
+  "settings-schema": "org.gnome.shell.extensions.annotations",
+  "gettext-domain": "annotations"
 }
