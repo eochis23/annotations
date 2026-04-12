@@ -1,12 +1,23 @@
 #!/usr/bin/env python3
 """Generate prev.raw / cur.raw with known shift for native/anno-motion."""
 import os
-import random
 import subprocess
 import sys
 
 W, H = 64, 48
 TRUE_DX, TRUE_DY = 5, -2
+
+
+def fill_xorshift32_prev(length):
+    """Same PRNG as lib/motionSync.js fillRandomishGrey8."""
+    s = 2463534242 & 0xFFFFFFFF
+    out = bytearray(length)
+    for i in range(length):
+        s = (s ^ ((s << 13) & 0xFFFFFFFF)) & 0xFFFFFFFF
+        s = (s ^ (s >> 17)) & 0xFFFFFFFF
+        s = (s ^ ((s << 5) & 0xFFFFFFFF)) & 0xFFFFFFFF
+        out[i] = s & 255
+    return out
 
 
 def main():
@@ -16,8 +27,7 @@ def main():
         print("run: meson setup build && meson compile -C build", file=sys.stderr)
         sys.exit(1)
 
-    rng = random.Random(42)
-    prev = bytes(rng.randint(0, 255) for _ in range(W * H))
+    prev = fill_xorshift32_prev(W * H)
     cur = bytearray(W * H)
     for y in range(H):
         for x in range(W):
