@@ -13,7 +13,7 @@ apply_one() {
     exit 1
   fi
   echo "patching $(basename "$dir") < $(basename "$patch")"
-  patch -d "$dir" -p1 --forward --reject-file=- <"$patch" || {
+  patch -d "$dir" -p1 <"$patch" || {
     echo "error: patch failed (maybe already applied?)" >&2
     exit 1
   }
