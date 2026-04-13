@@ -3,9 +3,9 @@
 ## Self-hosted zip (recommended first)
 
 1. Build schemas: `glib-compile-schemas schemas/`
-2. Build native helper: `cd native && meson setup build && meson compile -C build`
+2. Build native helper: `cd ../native && meson setup build && meson compile -C build`
 3. Copy the binary next to the extension (so `findAnnoMotionBinary` finds it):
-   `mkdir -p bin && cp native/build/anno-motion bin/anno-motion`
+   `mkdir -p bin && cp ../native/build/anno-motion bin/anno-motion`
 4. Pack (include every non-`metadata`/`extension` source you `import`):
 
 ```bash
@@ -22,7 +22,7 @@ gnome-extensions pack --force \
   .
 ```
 
-Or use `make pack` from the repository [`Makefile`](../Makefile).
+Or use `make pack` from this directory’s [`Makefile`](../Makefile).
 
 ## extensions.gnome.org
 

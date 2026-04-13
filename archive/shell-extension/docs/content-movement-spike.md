@@ -1,6 +1,6 @@
 # Content movement detection — signal spike (Phase 6)
 
-This document captures **feasible approaches** to detect that **underlying application content** moved (scroll, pan, sub-surface scroll) so ink can be **translated** in overlay space. It informs what we implement in **gjs** first vs what needs the **C ROI matcher** ([`native/anno-motion`](../native/anno-motion/)).
+This document captures **feasible approaches** to detect that **underlying application content** moved (scroll, pan, sub-surface scroll) so ink can be **translated** in overlay space. It informs what we implement in **gjs** first vs what needs the **C ROI matcher** ([`../../native/anno-motion`](../../native/anno-motion/)).
 
 ## Goals
 
@@ -55,7 +55,7 @@ This document captures **feasible approaches** to detect that **underlying appli
 
 ## Chosen rollout
 
-1. **Ship C helper** for ROI → `(dx, dy, confidence)` ([`native/anno-motion`](../native/anno-motion/)).
+1. **Ship C helper** for ROI → `(dx, dy, confidence)` ([`../../native/anno-motion`](../../native/anno-motion/)).
 2. **gjs** [`lib/motionClient.js`](../lib/motionClient.js) runs helper **off the main thread** via `Gio.Subprocess` + async completion; **throttle** Hz from settings.
 3. **Integrate** with stroke model [`translateAll`](../lib/strokes.js) when `confidence ≥ threshold` (settings).
 4. **Later:** optional AT-SPI spike module per high-value app to **skip pixels** when signals suffice.

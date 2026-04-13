@@ -2,7 +2,7 @@
 
 ## What the Shell patch does
 
-`mutter-fork/patches/0002-gnome-shell-plugin-annotation-fork-init.patch` updates `src/gnome-shell-plugin.c`:
+`patches/0002-gnome-shell-plugin-annotation-fork-init.patch` updates `src/gnome-shell-plugin.c`:
 
 - Includes **`meta/meta-wayland-compositor.h`**.
 - In **`gnome_shell_plugin_start()`**, after `_shell_global_set_plugin()`, obtains  

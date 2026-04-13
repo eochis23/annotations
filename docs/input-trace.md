@@ -39,4 +39,4 @@ GNOME Shell’s annotation overlay is usually **Clutter chrome**, not a **`MetaW
 
 ## 4. Patch reference
 
-Implementation (stub resolver + public API): `mutter-fork/patches/0001-mutter-annotation-fork-pointer-hook.patch`.
+Implementation (stub resolver + public API): `patches/0001-mutter-annotation-fork-pointer-hook.patch`.

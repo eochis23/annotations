@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Apply mutter-fork patch series to local clones (see clone-sources.sh).
+# Apply mutter + shell patch series to local clones (see clone-sources.sh).
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MUTTER="$ROOT/mutter-src"

@@ -1,5 +1,6 @@
 # Pack GNOME Shell extension zip (schemas + optional native helper).
 UUID = annotations@eochis23.github.io
+NATIVE = ../native
 
 .PHONY: schemas native pack test-motion
 
@@ -7,14 +8,14 @@ schemas:
 	glib-compile-schemas schemas/
 
 native:
-	cd native && (meson setup build --reconfigure 2>/dev/null || meson setup build) && meson compile -C build
+	cd $(NATIVE) && (meson setup build --reconfigure 2>/dev/null || meson setup build) && meson compile -C build
 
 test-motion: native
-	python3 native/test-scroll.py
+	python3 $(NATIVE)/test-scroll.py
 
 pack: schemas native
 	mkdir -p bin
-	cp -f native/build/anno-motion bin/anno-motion
+	cp -f $(NATIVE)/build/anno-motion bin/anno-motion
 	gnome-extensions pack --force \
 	  --extra-source=prefs.js \
 	  --extra-source=stylesheet.css \

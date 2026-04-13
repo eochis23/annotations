@@ -1,70 +1,42 @@
-# Screen Annotations (GNOME Shell)
+# Mutter + GNOME Shell fork (pointer passthrough hook)
 
-Desktop pen annotations **inside GNOME Shell** (D3 plan): transparent overlay, stacking, and input behavior are implemented as an extension instead of a standalone Wayland client.
+This repository holds **documentation**, **patch files**, and **scripts** to build a personal fork of **Mutter** and **GNOME Shell** that adds a compositor-side hook to rewrite **`wl_pointer`** focus while leaving the **tablet tool** path unchanged. It supports the [Screen Annotations](https://github.com/eochis23/annotations) goal: pen on an overlay, pointer to clients below.
 
-The old **GTK / libadwaita** app lives under [`legacy/gtk-application/`](legacy/gtk-application/) (MIT) for reference or non-GNOME experiments.
+**Upstream clones** (`mutter-src/`, `gnome-shell-src/`) are gitignored here; use `scripts/clone-sources.sh` to populate them.
 
-## Requirements
+## Contents
 
-- GNOME Shell **45+** (ESM extension entrypoint).
-- Wayland or X11 session under GNOME.
+| Path | Purpose |
+|------|---------|
+| [VERSIONS.md](VERSIONS.md) | Pinned versions and commit SHAs when patches were generated. |
+| [patches/](patches/) | `0001` mutter, `0002` gnome-shell — apply in order after clone. |
+| [docs/input-trace.md](docs/input-trace.md) | Where pointer vs tablet split in Mutter 49.x. |
+| [docs/shell-integration.md](docs/shell-integration.md) | How Shell should toggle the hook. |
+| [docs/VALIDATION.md](docs/VALIDATION.md) | Manual test matrix. |
+| [docs/PACKAGING-ROLLBACK.md](docs/PACKAGING-ROLLBACK.md) | Packaging notes and rollback. |
+| [scripts/clone-sources.sh](scripts/clone-sources.sh) | Shallow-clone Mutter + Shell at a tag. |
+| [scripts/apply-patches.sh](scripts/apply-patches.sh) | Apply `patches/*.patch` to clones. |
+| [scripts/rollback-hint.sh](scripts/rollback-hint.sh) | Print rollback reminders. |
 
-## Development install
-
-The extension UUID is **`annotations@eochis23.github.io`**. The folder you install **must** use that exact name.
-
-```bash
-mkdir -p ~/.local/share/gnome-shell/extensions
-glib-compile-schemas schemas/
-ln -sf "$(pwd)" ~/.local/share/gnome-shell/extensions/annotations@eochis23.github.io
-```
-
-Then **log out and back in** (Wayland) or restart GNOME Shell so schemas and the extension load.
-
-Enable from *Extensions* or:
+## Quick start
 
 ```bash
-gnome-extensions enable annotations@eochis23.github.io
+./scripts/clone-sources.sh
+./scripts/apply-patches.sh
+# Then build mutter + gnome-shell using your distro’s PKGBUILD / mock workflow.
 ```
 
-You should see a **tablet** status icon.
+## Archived implementations
 
-### Drawing on screen
+Earlier experiments and the in-tree **GNOME Shell extension** (gjs overlay + optional `anno-motion` helper) live under [`archive/`](archive/README.md): [`archive/shell-extension/`](archive/shell-extension/README.md), [`archive/native/`](archive/native/), [`archive/legacy/`](archive/legacy/README.md).
 
-1. Open the tablet menu → **Toggle drawing layer**, or press **Super+Alt+A** (default; avoids clashes with **Super+Shift+A** on some setups). Change via `gsettings` / dconf key `toggle-overlay`, then restart the extension or session.
-2. With the layer **on**, only a **pen or tablet tool** draws on the canvas; **mouse and touch** keep behaving normally on the desktop underneath. **Right or middle button** erases while using the pen.
-3. **Dock** (top-left): color swatches and **Clear all** — still usable with the **mouse**. **Eraser**: stylus barrel or right/middle button while inking with the pen.
-4. Toggle the layer off when you are done annotating.
+The **`fork_annotation_resolve_pointer_surface`** stub in `0001` returns the incoming surface unchanged until you implement scene picking (see [docs/input-trace.md](docs/input-trace.md)).
 
-After changing code, recompile schemas if `gschema.xml` changed, then disable/enable the extension or log out/in.
+## API added (fork)
 
-## Native motion helper (`anno-motion`)
-
-The C helper compares two raw **grey8** buffers (`width × height` bytes) and prints JSON `{"dx","dy","c","mse"}`.
-
-```bash
-meson setup native/build && meson compile -C native/build
-python3 native/test-scroll.py   # sanity check
-```
-
-`lib/motionClient.js` looks for `bin/anno-motion` first, then `native/build/anno-motion`.
-
-## Pack a zip
-
-```bash
-make pack
-# or see docs/packaging-ego-native.md for gnome-extensions pack flags
-```
-
-## Roadmap (see `docs/`)
-
-- [`docs/shell-extension-input.md`](docs/shell-extension-input.md) — overlay input notes.
-- [`docs/content-movement-spike.md`](docs/content-movement-spike.md) — AT-SPI vs ROI vs compositor signals.
-- [`docs/packaging-ego-native.md`](docs/packaging-ego-native.md) — EGO vs self-host when shipping `anno-motion`.
-
-Shell overlay + full drawing UI: still to be built on top of this scaffold.
+- **`meta_fork_annotation_set_pointer_passthrough (MetaWaylandCompositor *, gboolean)`** — public in `meta/meta-wayland-compositor.h`.
+- **`meta_fork_annotation_seat_set_pointer_passthrough (MetaWaylandSeat *, gboolean)`** — internal; used by the wrapper above.
 
 ## License
 
-Extension code: **GPL-2.0-or-later** ([`LICENSE`](LICENSE)).  
-Legacy GTK tree: **MIT** ([`legacy/gtk-application/COPYING`](legacy/gtk-application/COPYING)).
+Patch context is derived from **GPL-2.0-or-later** Mutter and Shell sources; your combined binaries remain under those licenses.

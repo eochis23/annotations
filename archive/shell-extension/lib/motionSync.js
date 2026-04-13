@@ -9,7 +9,7 @@ import { findAnnoMotionBinary, runMotionMatchAsync } from './motionClient.js';
  * many degenerate SSD minima — the old (i*17+41)%256 caused wrong dy, c≈0).
  */
 function fillRandomishGrey8(prev) {
-    /* xorshift32 (uint32); matches native/test-scroll.py for CI parity */
+    /* xorshift32 (uint32); matches archive/native/test-scroll.py for CI parity */
     let s = 2463534242 >>> 0;
     for (let i = 0; i < prev.length; i++) {
         s ^= s << 13;
@@ -112,7 +112,7 @@ export class MotionSyncService {
         const dir = this._extension.dir.get_path();
         const helper = findAnnoMotionBinary(dir);
         if (!helper) {
-            log('anno-motion binary not found (build native/ and optionally install to bin/).');
+            log('anno-motion binary not found (build ../native/ from archive/shell-extension and optionally install to bin/).');
             return;
         }
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Clone shallow Mutter + GNOME Shell for applying mutter-fork patches.
+# Clone shallow Mutter + GNOME Shell for applying this repo’s patch series.
 # Requires: git, network. See VERSIONS.md for the tag this tree was tested with.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

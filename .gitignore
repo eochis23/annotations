@@ -2,10 +2,10 @@
 build/
 builddir/
 .cursor/
-native/build/
-native/builddir/
+archive/native/build/
+archive/native/builddir/
 bin/anno-motion
 
-# Mutter fork local clones (tracked under mutter-fork/.gitignore); belt-and-suspenders
-mutter-fork/mutter-src/
-mutter-fork/gnome-shell-src/
+# Local upstream clones (see scripts/clone-sources.sh)
+mutter-src/
+gnome-shell-src/

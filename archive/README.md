@@ -1,9 +1,14 @@
-# Archived extension builds
+# Archive
 
-Immutable snapshots of the packaged GNOME Shell extension (same contents as `make pack` / `gnome-extensions pack`).
+Material that is **not** the primary Mutter + Shell fork workflow (see the repository [`README.md`](../README.md) at the root).
 
-| Archive | Extension `metadata.json` version | Notes |
-|---------|----------------------------------|--------|
-| `screen-annotations-v3-2026-04-12.zip` | 3 | Pre–dock/keyboard UX refactor; overlay input + pen capture work as of this date. |
+## Contents
 
-Install by extracting the UUID folder or installing the zip with **Extensions** / `gnome-extensions install`.
+| Path | Description |
+|------|-------------|
+| [`shell-extension/`](shell-extension/README.md) | Archived **GNOME Shell extension** (gjs): `extension.js`, `lib/`, `schemas/`, `Makefile` / `make pack`, etc. |
+| [`native/`](native/) | C **anno-motion** helper used by the archived extension (`../native` from `shell-extension/`). |
+| [`legacy/`](legacy/README.md) | **GTK 4 / libadwaita** prototype (`gtk-application/`). |
+| `screen-annotations-v3-2026-04-12.zip` | Packaged extension snapshot (same family as `make pack`). |
+
+Install a zip with **Extensions** / `gnome-extensions install`, or follow `shell-extension/README.md` for a dev symlink.

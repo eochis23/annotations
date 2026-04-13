@@ -10,6 +10,7 @@ export function findAnnoMotionBinary(extensionDir) {
     const candidates = [
         GLib.build_filenamev([extensionDir, 'bin', 'anno-motion']),
         GLib.build_filenamev([extensionDir, 'native', 'build', 'anno-motion']),
+        GLib.build_filenamev([extensionDir, '..', 'native', 'build', 'anno-motion']),
     ];
     for (const p of candidates) {
         if (GLib.file_test(p, GLib.FileTest.IS_EXECUTABLE))
