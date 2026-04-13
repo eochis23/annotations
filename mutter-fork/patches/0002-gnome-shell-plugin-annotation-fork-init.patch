@@ -1,0 +1,33 @@
+diff --git a/src/gnome-shell-plugin.c b/src/gnome-shell-plugin.c
+index fbdf075..702b616 100644
+--- a/src/gnome-shell-plugin.c
++++ b/src/gnome-shell-plugin.c
+@@ -40,6 +40,7 @@
+ #include <gjs/gjs.h>
+ #include <meta/display.h>
+ #include <meta/meta-plugin.h>
++#include <meta/meta-wayland-compositor.h>
+ #include <meta/util.h>
+ #include <mtk/mtk.h>
+ 
+@@ -65,9 +66,20 @@ static void
+ gnome_shell_plugin_start (MetaPlugin *plugin)
+ {
+   GnomeShellPlugin *shell_plugin = GNOME_SHELL_PLUGIN (plugin);
++  MetaDisplay *display;
++  MetaContext *context;
++  MetaWaylandCompositor *wayland_compositor;
+ 
+   shell_plugin->global = shell_global_get ();
+   _shell_global_set_plugin (shell_plugin->global, META_PLUGIN (shell_plugin));
++
++  /* Annotations fork: compositor hook defaults off; enable when overlay is shown
++   * (future: connect to extension / GSettings). See mutter-fork/docs/shell-integration.md */
++  display = meta_plugin_get_display (META_PLUGIN (shell_plugin));
++  context = meta_display_get_context (display);
++  wayland_compositor = meta_context_get_wayland_compositor (context);
++  if (wayland_compositor)
++    meta_fork_annotation_set_pointer_passthrough (wayland_compositor, FALSE);
+ }
+ 
+ static ShellWM *

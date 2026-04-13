@@ -1,0 +1,100 @@
+diff --git a/src/meta/meta-wayland-compositor.h b/src/meta/meta-wayland-compositor.h
+index 7f4a507..4ab17a5 100644
+--- a/src/meta/meta-wayland-compositor.h
++++ b/src/meta/meta-wayland-compositor.h
+@@ -37,4 +37,10 @@ MetaWaylandCompositor *meta_context_get_wayland_compositor (MetaContext *context
+ META_EXPORT
+ struct wl_display *meta_wayland_compositor_get_wayland_display (MetaWaylandCompositor *compositor);
+ 
++/* Annotations fork: enable compositor-side pointer passthrough hook (see
++ * meta_fork_annotation_seat_set_pointer_passthrough). Tablet routing unchanged. */
++META_EXPORT
++void meta_fork_annotation_set_pointer_passthrough (MetaWaylandCompositor *compositor,
++                                                 gboolean passthrough);
++
+ G_END_DECLS
+diff --git a/src/wayland/meta-wayland-seat.c b/src/wayland/meta-wayland-seat.c
+index 0dee6ec..69fe810 100644
+--- a/src/wayland/meta-wayland-seat.c
++++ b/src/wayland/meta-wayland-seat.c
+@@ -32,6 +32,33 @@ static gboolean meta_wayland_seat_handle_event_internal (MetaWaylandSeat    *sea
+ #define CAPABILITY_ENABLED(prev, cur, capability) ((cur & (capability)) && !(prev & (capability)))
+ #define CAPABILITY_DISABLED(prev, cur, capability) ((prev & (capability)) && !(cur & (capability)))
+ 
++/* --- Annotations fork: optional wl_pointer target rewrite (tablet unchanged) --- */
++static gboolean fork_annotation_pointer_passthrough = FALSE;
++
++static MetaWaylandSurface *
++fork_annotation_resolve_pointer_surface (MetaWaylandSeat      *seat,
++                                         MetaWaylandSurface   *surface,
++                                         ClutterFocus         *focus)
++{
++  if (!fork_annotation_pointer_passthrough)
++    return surface;
++
++  /* TODO: Descend scene / alternate pick so wl_pointer targets the client under
++   * Shell chrome. Extension overlay is usually not a MetaWaylandSurface; see
++   * mutter-fork/docs/input-trace.md */
++  (void) seat;
++  (void) focus;
++  return surface;
++}
++
++void
++meta_fork_annotation_seat_set_pointer_passthrough (MetaWaylandSeat *seat,
++                                                 gboolean passthrough)
++{
++  g_return_if_fail (seat != NULL);
++  fork_annotation_pointer_passthrough = passthrough;
++}
++
+ static void
+ unbind_resource (struct wl_resource *resource)
+ {
+@@ -270,7 +297,12 @@ default_focus (MetaWaylandEventHandler *handler,
+        CLUTTER_INPUT_CAPABILITY_TOUCHPAD |
+        CLUTTER_INPUT_CAPABILITY_TRACKBALL |
+        CLUTTER_INPUT_CAPABILITY_TRACKPOINT))
+-    meta_wayland_pointer_focus_surface (seat->pointer, surface);
++    {
++      MetaWaylandSurface *pointer_surface =
++        fork_annotation_resolve_pointer_surface (seat, surface, focus);
++
++      meta_wayland_pointer_focus_surface (seat->pointer, pointer_surface);
++    }
+ }
+ 
+ static gboolean
+diff --git a/src/wayland/meta-wayland-seat.h b/src/wayland/meta-wayland-seat.h
+index 59626cd..dfe561c 100644
+--- a/src/wayland/meta-wayland-seat.h
++++ b/src/wayland/meta-wayland-seat.h
+@@ -100,3 +100,9 @@ MetaWaylandInput * meta_wayland_seat_get_input (MetaWaylandSeat *seat);
+ 
+ MetaWaylandSurface * meta_wayland_seat_get_current_surface (MetaWaylandSeat *seat,
+                                                             ClutterFocus    *focus);
++
++/* Annotations fork (annotations@eochis23.github.io): when enabled, pointer
++ * focus may be rewritten before reaching meta_wayland_pointer_focus_surface().
++ * Tablet / tablet_tool path is unchanged. See mutter-fork/docs/input-trace.md */
++void meta_fork_annotation_seat_set_pointer_passthrough (MetaWaylandSeat *seat,
++                                                        gboolean passthrough);
+diff --git a/src/wayland/meta-wayland.c b/src/wayland/meta-wayland.c
+index f2f3775..3992a4b 100644
+--- a/src/wayland/meta-wayland.c
++++ b/src/wayland/meta-wayland.c
+@@ -1311,3 +1311,14 @@ meta_wayland_compositor_sync_focus (MetaWaylandCompositor *compositor)
+   meta_wayland_compositor_update_focus (compositor,
+                                         display ? display->focus_window : NULL);
+ }
++
++void
++meta_fork_annotation_set_pointer_passthrough (MetaWaylandCompositor *compositor,
++                                              gboolean passthrough)
++{
++  g_return_if_fail (META_IS_WAYLAND_COMPOSITOR (compositor));
++  if (!compositor->seat)
++    return;
++
++  meta_fork_annotation_seat_set_pointer_passthrough (compositor->seat, passthrough);
++}

@@ -5,3 +5,7 @@ builddir/
 native/build/
 native/builddir/
 bin/anno-motion
+
+# Mutter fork local clones (tracked under mutter-fork/.gitignore); belt-and-suspenders
+mutter-fork/mutter-src/
+mutter-fork/gnome-shell-src/
