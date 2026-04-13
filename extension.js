@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 import GLib from 'gi://GLib';
+import Gio from 'gi://Gio';
 import GObject from 'gi://GObject';
 import Meta from 'gi://Meta';
 import Shell from 'gi://Shell';
@@ -76,6 +77,16 @@ export default class AnnotationsExtension extends Extension {
 
         this._overlay = new OverlaySession(this, this._strokeModel);
 
+        this._shellForkSettings = null;
+        try {
+            const src = Gio.SettingsSchemaSource.get_default();
+            const sch = src?.lookup('org.gnome.shell', true);
+            if (sch?.has_key('annotation-pointer-passthrough'))
+                this._shellForkSettings = new Gio.Settings({ schema_id: 'org.gnome.shell' });
+        } catch (e) {
+            log(`annotations: forked org.gnome.shell annotation-pointer-passthrough unavailable: ${e}`);
+        }
+
         /* Empty accelerator if schema was not recompiled after upgrade — reset so WM binds. */
         try {
             const acc = this._settings.get_strv('toggle-overlay');
@@ -117,6 +128,8 @@ export default class AnnotationsExtension extends Extension {
             log(`annotations removeKeybinding: ${e}`);
         }
 
+        this.syncShellPointerPassthrough(false);
+
         if (this._overlay) {
             this._overlay.destroy();
             this._overlay = null;
@@ -137,6 +150,20 @@ export default class AnnotationsExtension extends Extension {
     toggleDrawingOverlay() {
         if (this._overlay)
             this._overlay.toggle();
+    }
+
+    /**
+     * When using the forked GNOME Shell + Mutter pair, toggles compositor pointer passthrough
+     * so core pointer events reach clients under Shell chrome while the overlay is visible.
+     */
+    syncShellPointerPassthrough(visible) {
+        if (!this._shellForkSettings)
+            return;
+        try {
+            this._shellForkSettings.set_boolean('annotation-pointer-passthrough', !!visible);
+        } catch (e) {
+            log(`annotations: set annotation-pointer-passthrough: ${e}`);
+        }
     }
 
     /** Menu action: exercise C matcher + translateAll on the in-memory stroke model. */

@@ -6,6 +6,14 @@
       <summary>Keyboard shortcut to show or hide the drawing layer</summary>
       <description>Default uses Alt to avoid clashes with Super+Shift+A on some distros. Recompile schemas after upgrades; reset the key if the shortcut stops working.</description>
     </key>
+    <key name="dock-x" type="i">
+      <default>14</default>
+      <summary>Dock horizontal offset inside the overlay (pixels)</summary>
+    </key>
+    <key name="dock-y" type="i">
+      <default>14</default>
+      <summary>Dock vertical offset inside the overlay (pixels)</summary>
+    </key>
     <key name="movement-sync" type="b">
       <default>false</default>
       <summary>Content movement sync</summary>

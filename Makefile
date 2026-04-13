@@ -1,6 +1,6 @@
 # Pack GNOME Shell extension zip (schemas + optional native helper).
 UUID = annotations@eochis23.github.io
-NATIVE = ../native
+NATIVE = native
 
 .PHONY: schemas native pack test-motion
 

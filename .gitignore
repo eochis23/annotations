@@ -4,6 +4,8 @@ builddir/
 .cursor/
 archive/native/build/
 archive/native/builddir/
+native/build/
+native/builddir/
 bin/anno-motion
 
 # Local upstream clones (see scripts/clone-sources.sh)

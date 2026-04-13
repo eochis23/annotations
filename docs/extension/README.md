@@ -1,10 +1,10 @@
-# Screen Annotations (GNOME Shell extension, archived)
+# Screen Annotations (extension notes)
 
-This tree is **archived** under `archive/shell-extension/`. The primary work in the parent repository is the **Mutter + GNOME Shell fork** (see [`../../README.md`](../../README.md)).
+The **live** extension sources live at the **repository root** (`extension.js`, `lib/`, `schemas/`, …). This folder keeps **supplemental documentation** only. The **Mutter + GNOME Shell fork** is described in [`../../README.md`](../../README.md).
 
 Desktop pen annotations **inside GNOME Shell** (D3 plan): transparent overlay, stacking, and input behavior are implemented as an extension instead of a standalone Wayland client.
 
-The old **GTK / libadwaita** app lives under [`../../legacy/gtk-application/`](../../legacy/gtk-application/) (MIT) for reference or non-GNOME experiments.
+The old **GTK / libadwaita** app lives under [`../../archive/legacy/gtk-application/`](../../archive/legacy/gtk-application/) (MIT) for reference or non-GNOME experiments.
 
 ## Requirements
 
@@ -45,11 +45,11 @@ After changing code, recompile schemas if `gschema.xml` changed, then disable/en
 The C helper compares two raw **grey8** buffers (`width × height` bytes) and prints JSON `{"dx","dy","c","mse"}`.
 
 ```bash
-cd ../native && meson setup build && meson compile -C build
-python3 ../native/test-scroll.py   # sanity check
+cd ../../native && meson setup build && meson compile -C build
+python3 ../../native/test-scroll.py   # sanity check
 ```
 
-`lib/motionClient.js` looks for `bin/anno-motion` first, then `native/build/anno-motion` (if present), then `../native/build/anno-motion` when this folder is linked from `~/.local/share/gnome-shell/extensions/…`.
+`lib/motionClient.js` looks for `bin/anno-motion` first, then `native/build/anno-motion` relative to the extension install directory.
 
 ## Pack a zip
 
@@ -58,15 +58,15 @@ make pack
 # or see docs/packaging-ego-native.md for gnome-extensions pack flags
 ```
 
-## Roadmap (see `docs/`)
+## Roadmap (see this folder)
 
-- [`docs/shell-extension-input.md`](docs/shell-extension-input.md) — overlay input notes.
-- [`docs/content-movement-spike.md`](docs/content-movement-spike.md) — AT-SPI vs ROI vs compositor signals.
-- [`docs/packaging-ego-native.md`](docs/packaging-ego-native.md) — EGO vs self-host when shipping `anno-motion`.
+- [`shell-extension-input.md`](shell-extension-input.md) — overlay input notes.
+- [`content-movement-spike.md`](content-movement-spike.md) — AT-SPI vs ROI vs compositor signals.
+- [`packaging-ego-native.md`](packaging-ego-native.md) — EGO vs self-host when shipping `anno-motion`.
 
 Shell overlay + full drawing UI: still to be built on top of this scaffold.
 
 ## License
 
 Extension code: **GPL-2.0-or-later** ([`../../LICENSE`](../../LICENSE)).  
-Legacy GTK tree: **MIT** ([`../../legacy/gtk-application/COPYING`](../../legacy/gtk-application/COPYING)).
+Legacy GTK tree: **MIT** ([`../../archive/legacy/gtk-application/COPYING`](../../archive/legacy/gtk-application/COPYING)).

@@ -24,6 +24,20 @@
   outline-offset: 2px;
 }
 
+.anno-dock-drag {
+  padding: 2px 6px;
+  border-radius: 6px;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.75);
+}
+
+.anno-dock-undo {
+  padding: 6px 10px;
+  border-radius: 8px;
+  color: #deddda;
+  font-weight: 600;
+}
+
 .anno-dock-clear {
   padding: 6px 10px;
   border-radius: 8px;

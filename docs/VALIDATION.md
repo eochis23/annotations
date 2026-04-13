@@ -10,8 +10,8 @@ Run these **after** installing your rebuilt **mutter** and **gnome-shell** packa
 | W2 | Open a **native Wayland** terminal or editor | Window receives clicks. |
 | W3 | With annotations overlay **off**, click client | Normal. |
 | W4 | With overlay **on** and passthrough **FALSE** (default) | Same as today (extension behavior). |
-| W5 | With passthrough **TRUE** and resolver **still stub** | Behavior matches FALSE until resolver is implemented. |
-| W6 | After resolver implements “pick under chrome” | Clicks reach client under overlay; pen/tablet still draws. |
+| W5 | With passthrough **TRUE** and overlay **on** | `org.gnome.shell annotation-pointer-passthrough` is true; Mutter re-picks `wl_pointer` under Shell chrome. |
+| W6 | Same as W5 over a **native Wayland** client | Clicks reach the client; pen/tablet still draws on the overlay. |
 
 ## Xwayland
 

@@ -1,8 +1,34 @@
+diff --git a/data/org.gnome.shell.gschema.xml.in b/data/org.gnome.shell.gschema.xml.in
+index 9a55ee7..6f18eef 100644
+--- a/data/org.gnome.shell.gschema.xml.in
++++ b/data/org.gnome.shell.gschema.xml.in
+@@ -11,6 +11,15 @@
+         using the Alt-F2 dialog.
+       </description>
+     </key>
++    <key name="annotation-pointer-passthrough" type="b">
++      <default>false</default>
++      <summary>Annotations fork: send core pointer to clients under Shell chrome</summary>
++      <description>
++        When true, the compositor may rewrite wl_pointer focus so the mouse
++        targets client surfaces beneath GNOME Shell UI (used by the screen
++        annotations extension). Requires a matching Mutter fork.
++      </description>
++    </key>
+     <key name="enabled-extensions" type="as">
+       <default>[]</default>
+       <summary>UUIDs of extensions to enable</summary>
 diff --git a/src/gnome-shell-plugin.c b/src/gnome-shell-plugin.c
-index fbdf075..702b616 100644
+index fbdf075..ba38979 100644
 --- a/src/gnome-shell-plugin.c
 +++ b/src/gnome-shell-plugin.c
-@@ -40,6 +40,7 @@
+@@ -36,10 +36,13 @@
+ #include <stdlib.h>
+ #include <string.h>
+ 
++#include <gio/gio.h>
++
+ #include <clutter/clutter.h>
  #include <gjs/gjs.h>
  #include <meta/display.h>
  #include <meta/meta-plugin.h>
@@ -10,24 +36,65 @@ index fbdf075..702b616 100644
  #include <meta/util.h>
  #include <mtk/mtk.h>
  
-@@ -65,9 +66,20 @@ static void
- gnome_shell_plugin_start (MetaPlugin *plugin)
- {
-   GnomeShellPlugin *shell_plugin = GNOME_SHELL_PLUGIN (plugin);
+@@ -61,6 +64,41 @@ struct _GnomeShellPlugin
+ 
+ G_DEFINE_TYPE (GnomeShellPlugin, gnome_shell_plugin, META_TYPE_PLUGIN)
+ 
++static GSettings *annotation_fork_shell_settings;
++static gulong annotation_fork_settings_handler;
++
++static void
++annotation_fork_sync_pointer_passthrough (GnomeShellPlugin *shell_plugin)
++{
 +  MetaDisplay *display;
 +  MetaContext *context;
 +  MetaWaylandCompositor *wayland_compositor;
++  gboolean enable;
++
++  if (!annotation_fork_shell_settings)
++    return;
++
++  display = meta_plugin_get_display (META_PLUGIN (shell_plugin));
++  context = meta_display_get_context (display);
++  wayland_compositor = meta_context_get_wayland_compositor (context);
++  if (!wayland_compositor)
++    return;
++
++  enable = g_settings_get_boolean (annotation_fork_shell_settings,
++                                   "annotation-pointer-passthrough");
++  meta_fork_annotation_set_pointer_passthrough (wayland_compositor, enable);
++}
++
++static void
++annotation_fork_pointer_passthrough_changed (GnomeShellPlugin *shell_plugin,
++                                             GSettings         *settings,
++                                             const char        *key)
++{
++  (void) settings;
++  (void) key;
++  annotation_fork_sync_pointer_passthrough (shell_plugin);
++}
++
+ static void
+ gnome_shell_plugin_start (MetaPlugin *plugin)
+ {
+@@ -68,6 +106,19 @@ gnome_shell_plugin_start (MetaPlugin *plugin)
  
    shell_plugin->global = shell_global_get ();
    _shell_global_set_plugin (shell_plugin->global, META_PLUGIN (shell_plugin));
 +
-+  /* Annotations fork: compositor hook defaults off; enable when overlay is shown
-+   * (future: connect to extension / GSettings). See mutter-fork/docs/shell-integration.md */
-+  display = meta_plugin_get_display (META_PLUGIN (shell_plugin));
-+  context = meta_display_get_context (display);
-+  wayland_compositor = meta_context_get_wayland_compositor (context);
-+  if (wayland_compositor)
-+    meta_fork_annotation_set_pointer_passthrough (wayland_compositor, FALSE);
++  /* Annotations fork: follow org.gnome.shell annotation-pointer-passthrough (see docs/shell-integration.md). */
++  if (!annotation_fork_shell_settings)
++    {
++      annotation_fork_shell_settings = g_settings_new ("org.gnome.shell");
++      annotation_fork_settings_handler =
++        g_signal_connect_swapped (annotation_fork_shell_settings,
++                                    "changed::annotation-pointer-passthrough",
++                                    G_CALLBACK (annotation_fork_pointer_passthrough_changed),
++                                    shell_plugin);
++    }
++
++  annotation_fork_sync_pointer_passthrough (shell_plugin);
  }
  
  static ShellWM *

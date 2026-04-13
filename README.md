@@ -14,6 +14,7 @@ This repository holds **documentation**, **patch files**, and **scripts** to bui
 | [docs/shell-integration.md](docs/shell-integration.md) | How Shell should toggle the hook. |
 | [docs/VALIDATION.md](docs/VALIDATION.md) | Manual test matrix. |
 | [docs/PACKAGING-ROLLBACK.md](docs/PACKAGING-ROLLBACK.md) | Packaging notes and rollback. |
+| [docs/SCROLL_SYNC.md](docs/SCROLL_SYNC.md) | Scroll / content-movement strategy (post–per-window ink). |
 | [scripts/clone-sources.sh](scripts/clone-sources.sh) | Shallow-clone Mutter + Shell at a tag. |
 | [scripts/apply-patches.sh](scripts/apply-patches.sh) | Apply `patches/*.patch` to clones. |
 | [scripts/rollback-hint.sh](scripts/rollback-hint.sh) | Print rollback reminders. |
@@ -26,11 +27,13 @@ This repository holds **documentation**, **patch files**, and **scripts** to bui
 # Then build mutter + gnome-shell using your distro’s PKGBUILD / mock workflow.
 ```
 
+## GNOME Shell extension (development tree)
+
+The **annotations** Shell extension (`extension.js`, `lib/`, `schemas/`, `Makefile`, `native/`) lives at the **repository root**. With the forked Shell package, the extension toggles **`org.gnome.shell` `annotation-pointer-passthrough`** so the compositor re-picks **`wl_pointer`** targets under Shell chrome while the overlay is visible.
+
 ## Archived implementations
 
-Earlier experiments and the in-tree **GNOME Shell extension** (gjs overlay + optional `anno-motion` helper) live under [`archive/`](archive/README.md): [`archive/shell-extension/`](archive/shell-extension/README.md), [`archive/native/`](archive/native/), [`archive/legacy/`](archive/legacy/README.md).
-
-The **`fork_annotation_resolve_pointer_surface`** stub in `0001` returns the incoming surface unchanged until you implement scene picking (see [docs/input-trace.md](docs/input-trace.md)).
+Older snapshots and non-Shell code live under [`archive/`](archive/README.md): [`archive/legacy/`](archive/legacy/README.md), packaged zips, etc.
 
 ## API added (fork)
 

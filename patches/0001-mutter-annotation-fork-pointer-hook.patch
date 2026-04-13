@@ -14,10 +14,21 @@ index 7f4a507..4ab17a5 100644
 +
  G_END_DECLS
 diff --git a/src/wayland/meta-wayland-seat.c b/src/wayland/meta-wayland-seat.c
-index 0dee6ec..69fe810 100644
+index 0dee6ec..c04238b 100644
 --- a/src/wayland/meta-wayland-seat.c
 +++ b/src/wayland/meta-wayland-seat.c
-@@ -32,6 +32,33 @@ static gboolean meta_wayland_seat_handle_event_internal (MetaWaylandSeat    *sea
+@@ -21,6 +21,10 @@
+ 
+ #include "wayland/meta-wayland-seat.h"
+ 
++#include "backends/meta-backend.h"
++#include "compositor/meta-surface-actor-wayland.h"
++#include "core/window-private.h"
++#include "meta/meta-cursor-tracker.h"
+ #include "wayland/meta-wayland-data-device.h"
+ #include "wayland/meta-wayland-private.h"
+ #include "wayland/meta-wayland-tablet-seat.h"
+@@ -32,6 +36,88 @@ static gboolean meta_wayland_seat_handle_event_internal (MetaWaylandSeat    *sea
  #define CAPABILITY_ENABLED(prev, cur, capability) ((cur & (capability)) && !(prev & (capability)))
  #define CAPABILITY_DISABLED(prev, cur, capability) ((prev & (capability)) && !(cur & (capability)))
  
@@ -29,15 +40,70 @@ index 0dee6ec..69fe810 100644
 +                                         MetaWaylandSurface   *surface,
 +                                         ClutterFocus         *focus)
 +{
++  MetaWaylandCompositor *compositor;
++  MetaContext *context;
++  MetaBackend *backend;
++  MetaCursorTracker *tracker;
++  graphene_point_t coords;
++  ClutterStage *stage;
++  GList *deactivated = NULL;
++  MetaWaylandSurface *picked_surface = NULL;
++  int guard;
++
++  (void) focus;
++
 +  if (!fork_annotation_pointer_passthrough)
 +    return surface;
 +
-+  /* TODO: Descend scene / alternate pick so wl_pointer targets the client under
-+   * Shell chrome. Extension overlay is usually not a MetaWaylandSurface; see
-+   * mutter-fork/docs/input-trace.md */
-+  (void) seat;
-+  (void) focus;
-+  return surface;
++  compositor = seat->compositor;
++  context = meta_wayland_compositor_get_context (compositor);
++  backend = meta_context_get_backend (context);
++  tracker = meta_backend_get_cursor_tracker (backend);
++  meta_cursor_tracker_get_pointer (tracker, &coords, NULL);
++
++  stage = CLUTTER_STAGE (meta_backend_get_stage (backend));
++
++  /* Shell / extension UI sits above client surfaces in the stage pick order.
++   * Temporarily mark non-client actors non-reactive and re-pick until we hit a
++   * MetaSurfaceActorWayland (same modal rule as meta_wayland_pointer repick). */
++  for (guard = 0; guard < 128; guard++)
++    {
++      ClutterActor *actor;
++
++      actor = clutter_stage_get_actor_at_pos (stage,
++                                              CLUTTER_PICK_REACTIVE,
++                                              coords.x,
++                                              coords.y);
++      if (!actor || actor == CLUTTER_ACTOR (stage))
++        break;
++
++      if (META_IS_SURFACE_ACTOR_WAYLAND (actor))
++        {
++          MetaSurfaceActorWayland *actor_wayland =
++            META_SURFACE_ACTOR_WAYLAND (actor);
++          MetaWindow *window = NULL;
++
++          picked_surface =
++            meta_surface_actor_wayland_get_surface (actor_wayland);
++          if (picked_surface)
++            window = meta_wayland_surface_get_window (picked_surface);
++
++          if (window && meta_window_has_modals (window))
++            picked_surface = NULL;
++
++          if (picked_surface)
++            break;
++        }
++
++      clutter_actor_set_reactive (actor, FALSE);
++      deactivated = g_list_prepend (deactivated, actor);
++    }
++
++  for (GList *l = deactivated; l; l = l->next)
++    clutter_actor_set_reactive (CLUTTER_ACTOR (l->data), TRUE);
++  g_list_free (deactivated);
++
++  return picked_surface ? picked_surface : surface;
 +}
 +
 +void
@@ -51,7 +117,7 @@ index 0dee6ec..69fe810 100644
  static void
  unbind_resource (struct wl_resource *resource)
  {
-@@ -270,7 +297,12 @@ default_focus (MetaWaylandEventHandler *handler,
+@@ -270,7 +356,12 @@ default_focus (MetaWaylandEventHandler *handler,
         CLUTTER_INPUT_CAPABILITY_TOUCHPAD |
         CLUTTER_INPUT_CAPABILITY_TRACKBALL |
         CLUTTER_INPUT_CAPABILITY_TRACKPOINT))
