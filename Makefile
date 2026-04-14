@@ -16,17 +16,14 @@ test-motion: native
 pack: schemas native
 	mkdir -p bin
 	cp -f $(NATIVE)/build/anno-motion bin/anno-motion
+	# Pass directories for lib/, schemas/, bin/ — listing lib/*.js flattens basenames and breaks ./lib/… imports.
 	gnome-extensions pack --force \
 	  --extra-source=prefs.js \
 	  --extra-source=stylesheet.css \
-	  --extra-source=lib/strokes.js \
-	  --extra-source=lib/devices.js \
-	  --extra-source=lib/motionClient.js \
-	  --extra-source=lib/motionSync.js \
-	  --extra-source=lib/overlaySession.js \
-	  --extra-source=lib/annoDebug.js \
-	  --extra-source=schemas/gschemas.compiled \
-	  --extra-source=schemas/org.gnome.shell.extensions.annotations.gschema.xml \
-	  --extra-source=bin/anno-motion \
+	  --extra-source=lib \
+	  --extra-source=schemas \
+	  --extra-source=bin \
 	  .
+	# Pack omits schemas/gschemas.compiled; settings need it under schemas/ in the zip.
+	zip -q -u $(UUID).shell-extension.zip schemas/gschemas.compiled
 	@echo "Built $(UUID).shell-extension.zip"
