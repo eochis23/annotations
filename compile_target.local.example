@@ -1,0 +1,11 @@
+# Copy to compile_target.local.sh next to compile_target.sh and edit for your machine.
+# compile_target.local.sh is gitignored.
+
+MUTTER_SRC="/home/you/Projects/annotations/mutter"
+SHELL_SRC="/home/you/Projects/annotations/gnome-shell"
+
+# Where the target root is mounted (DESTDIR install root).
+MOUNT_POINT="/run/media/you/volume"
+
+# Filesystem label used to resolve the block device: /dev/disk/by-label/<label>
+PARTITION_FS_LABEL="your-root-label"
