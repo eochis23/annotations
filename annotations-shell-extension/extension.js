@@ -45,8 +45,20 @@ function dbusCall(methodName, parameters, replyHandler) {
         });
 }
 
+function removeSource(id) {
+    if (id)
+        GLib.source_remove(id);
+    return 0;
+}
+
 export default class AnnotationExtension extends Extension {
     enable() {
+        this._dockPositionTimeout = 0;
+        this._idlePos = 0;
+        this._monitorsId = 0;
+        this._allocId = 0;
+        this._dockRetry = 0;
+
         this._dock = new St.BoxLayout({
             style_class: 'annotation-dock',
             vertical: false,
@@ -86,9 +98,12 @@ export default class AnnotationExtension extends Extension {
         this._dock.add_child(trash);
 
         Main.uiGroup.add_child(this._dock);
-        this._dock.raise_top();
+        /* raise_top() is not always exposed on St actors in GJS; Shell uses this pattern. */
+        Main.uiGroup.set_child_above_sibling(this._dock, null);
 
         this._positionDock = () => {
+            if (!this._dock)
+                return;
             const mon = Main.layoutManager.primaryMonitor;
             if (!mon || mon.width < 1 || mon.height < 1)
                 return;
@@ -108,17 +123,21 @@ export default class AnnotationExtension extends Extension {
             this._positionDock();
         });
 
-        this._dockRetry = 0;
         const schedulePositionRetries = () => {
+            if (!this._dock)
+                return;
             this._positionDock();
             if ((!Main.layoutManager.primaryMonitor ||
                 this._dock.width < 8) &&
                 this._dockRetry < 40) {
                 this._dockRetry++;
-                GLib.timeout_add(GLib.PRIORITY_LOW, 100, () => {
-                    schedulePositionRetries();
-                    return GLib.SOURCE_REMOVE;
-                });
+                this._dockPositionTimeout = removeSource(this._dockPositionTimeout);
+                this._dockPositionTimeout = GLib.timeout_add(
+                    GLib.PRIORITY_LOW, 100, () => {
+                        this._dockPositionTimeout = 0;
+                        schedulePositionRetries();
+                        return GLib.SOURCE_REMOVE;
+                    });
             }
         };
         this._idlePos = GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
@@ -139,18 +158,25 @@ export default class AnnotationExtension extends Extension {
     disable() {
         dbusCall('SetActive', new GLib.Variant('(b)', [false]), null);
 
+        this._idlePos = removeSource(this._idlePos);
+        this._dockPositionTimeout = removeSource(this._dockPositionTimeout);
+
         if (this._monitorsId) {
             Main.layoutManager.disconnect(this._monitorsId);
             this._monitorsId = 0;
         }
-        if (this._idlePos)
-            GLib.source_remove(this._idlePos);
-        this._idlePos = 0;
-        if (this._allocId) {
-            this._dock.disconnect(this._allocId);
-            this._allocId = 0;
-        }
-        this._dock.destroy();
+
+        const dock = this._dock;
         this._dock = null;
+
+        if (dock) {
+            if (this._allocId) {
+                dock.disconnect(this._allocId);
+                this._allocId = 0;
+            }
+            if (dock.get_parent())
+                dock.get_parent().remove_child(dock);
+            dock.destroy();
+        }
     }
 }
