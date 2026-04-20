@@ -131,3 +131,45 @@ Let's have debugging messages inside those functions so we can see exactly what'
 ## 15
 
 Let's work on the next step in the plan. I want you to make sure that when the annotation layer is open, only the pen can interact with it and that everything else interacts with the rest of the desktop like normal
+
+---
+
+## 16
+
+I don't need a legacy build mode. just make sure everything works with the best method possible
+
+---
+
+## 17
+
+is it ready to run?
+
+---
+
+## 18
+
+how do I do 1. when I can't see get it to display anything on the second partition?
+
+---
+
+## 19
+
+give me the command to run the file please
+
+---
+
+## 20
+
+I saw this: Success! Installed under /run/media/eric/endeavouros/usr (targets: mutter). Unmounting /run/media/eric/endeavouros... Does that mean that it'll work when I open the other partition?
+
+---
+
+## 21
+
+help me clear out all partitions I'm not using
+
+---
+
+## 22
+
+add all prompts from this chat to prompt_log.md

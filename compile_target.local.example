@@ -25,3 +25,20 @@ PARTITION_FS_LABEL="your-root-label"
 # Rollback distro packages on the mounted root (from host), e.g.:
 #   sudo arch-chroot /run/media/you/volume pacman -S --noconfirm mutter
 #   sudo arch-chroot /run/media/you/volume pacman -S --noconfirm gnome-shell
+
+# --- compile_target_chroot_git.sh only ---
+# Clone path *inside the chroot* (on the mounted root). Must be writable.
+CHROOT_REPO_DIR="/mnt/build/annotations"
+
+# Remote used for host `git push` (inside chroot, fetch always uses remote name "origin").
+# GIT_REMOTE_NAME=origin
+
+# If HEAD is detached on the host, set an explicit branch name for push + chroot sync:
+# OVERRIDE_BRANCH=main
+
+# Optional shallow first clone (empty = full clone):
+# GIT_CLONE_DEPTH=1
+
+# For git@... remotes, bind-mount host SSH keys so `git fetch` works in chroot:
+# SSH_BIND=1
+# HOST_SSH_DIR="/home/you/.ssh"
