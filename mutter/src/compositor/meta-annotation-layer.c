@@ -100,6 +100,9 @@ sync_texture_from_surface (MetaAnnotationLayer *layer)
 
     if (c)
       clutter_content_invalidate (c);
+    /* Invalidate alone is not always enough for a stage-level actor to repaint. */
+    if (layer->actor)
+      clutter_actor_queue_redraw (layer->actor);
   }
 }
 
