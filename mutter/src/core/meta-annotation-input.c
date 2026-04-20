@@ -27,10 +27,10 @@ static gfloat        annotation_last_tablet_y;
 static gint64        annotation_tablet_monotonic_us;
 
 #define ANNOTATION_TABLET_GROUP_COALESCE_USEC (200 * G_TIME_SPAN_MILLISECOND)
-/* Any two points on a typical laptop panel fit inside ~2.2k px in one space;
- * integrated “mouse” nodes often disagree with the tablet node by >200 px. */
-#define ANNOTATION_TABLET_PROXIMITY_TIME_USEC  (1000 * G_TIME_SPAN_MILLISECOND)
-#define ANNOTATION_TABLET_PROXIMITY_DIST2      (2200.0f * 2200.0f)
+/* Must stay well below ~0.75× min(screen w,h): a “full diagonal” threshold
+ * incorrectly freezes every POINTER on the panel (including the real mouse). */
+#define ANNOTATION_TABLET_PROXIMITY_TIME_USEC  (600 * G_TIME_SPAN_MILLISECOND)
+#define ANNOTATION_TABLET_PROXIMITY_DIST2      (480.0f * 480.0f)
 #define ANNOTATION_UNKNOWN_LIBINPUT_GROUP       ((gint64) -1)
 
 /* #region agent log */
@@ -44,6 +44,10 @@ meta_annotation_debug_append_ndjson (const gchar *hypothesis_id,
                                      gint          d)
 {
   g_autofree gchar *cache_path = NULL;
+
+  /* Hot path: never open files unless explicitly enabled (avoids IO stalls). */
+  if (!g_getenv ("MUTTER_ANNOTATION_DEBUG_NDJSON"))
+    return;
   const gchar *pathv[4];
   guint n;
   guint i;
