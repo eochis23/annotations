@@ -49,7 +49,6 @@ struct _MetaAnnotationLayer
 {
   MetaBackend *backend;
   ClutterActor *actor;
-  ClutterContent *content;
   cairo_surface_t *surface;
   gboolean active;
   float rgba[4];
@@ -63,11 +62,16 @@ struct _MetaAnnotationLayer
 static CoglTexture *
 get_cogl_texture (MetaAnnotationLayer *layer)
 {
-  if (!layer->content)
+  ClutterContent *c;
+
+  if (!layer->actor)
     return NULL;
 
-  return clutter_texture_content_get_texture (
-    CLUTTER_TEXTURE_CONTENT (layer->content));
+  c = clutter_actor_get_content (layer->actor);
+  if (!c || !CLUTTER_IS_TEXTURE_CONTENT (c))
+    return NULL;
+
+  return clutter_texture_content_get_texture (CLUTTER_TEXTURE_CONTENT (c));
 }
 
 static void
@@ -89,6 +93,12 @@ sync_texture_from_surface (MetaAnnotationLayer *layer)
 
     annotation_agent_log ("H_texture", "meta-annotation-layer.c:sync",
                           "cairo_vs_cogl", cw, ch, tw, th);
+    if (cw != tw || ch != th)
+      {
+        annotation_agent_log ("H_texture", "meta-annotation-layer.c:sync",
+                              "size_mismatch_skip_upload", cw, ch, tw, th);
+        return;
+      }
   }
   /* #endregion */
 
@@ -103,8 +113,12 @@ sync_texture_from_surface (MetaAnnotationLayer *layer)
                               NULL))
     g_warning ("meta_annotation_layer: texture upload failed");
 
-  if (layer->content)
-    clutter_content_invalidate (layer->content);
+  {
+    ClutterContent *c = clutter_actor_get_content (layer->actor);
+
+    if (c)
+      clutter_content_invalidate (c);
+  }
 }
 
 static void
@@ -130,16 +144,13 @@ recreate_buffers (MetaAnnotationLayer *layer,
                   int                  height)
 {
   CoglContext *ctx;
-  g_autoptr (CoglTexture) new_tex = NULL;
 
   if (width < 1 || height < 1)
     return;
 
-  /* Drop actor's content ref before unreffing layer->content (same object); avoids
-   * dangling priv->content / invalid texture on dispose (see coredump in finalize). */
+  /* Actor is the sole owner of ClutterContent; avoid a second GObject ref in this struct. */
   if (layer->actor)
     clutter_actor_set_content (layer->actor, NULL);
-  g_clear_object (&layer->content);
   g_clear_pointer (&layer->surface, cairo_surface_destroy);
 
   layer->surface = cairo_image_surface_create (CAIRO_FORMAT_ARGB32, width, height);
@@ -154,15 +165,17 @@ recreate_buffers (MetaAnnotationLayer *layer,
 
   ctx = clutter_backend_get_cogl_context (
     meta_backend_get_clutter_backend (layer->backend));
-  new_tex = COGL_TEXTURE (cogl_texture_2d_new_with_size (ctx, width, height));
-  cogl_texture_allocate (new_tex, NULL);
+  {
+    g_autoptr (CoglTexture) local_tex =
+      COGL_TEXTURE (cogl_texture_2d_new_with_size (ctx, width, height));
+    g_autoptr (ClutterContent) local_content = NULL;
 
-  layer->content = clutter_texture_content_new_from_texture (new_tex, NULL);
-  g_object_unref (new_tex);
+    cogl_texture_allocate (local_tex, NULL);
+    local_content = clutter_texture_content_new_from_texture (local_tex, NULL);
+    clutter_actor_set_content (layer->actor, local_content);
+  }
 
   sync_texture_from_surface (layer);
-
-  clutter_actor_set_content (layer->actor, layer->content);
   clutter_actor_set_size (layer->actor, width, height);
 }
 
@@ -230,14 +243,17 @@ meta_annotation_layer_destroy (MetaAnnotationLayer *layer)
   if (!layer)
     return;
 
+  /* #region agent log */
+  annotation_agent_log ("H_destroy", "meta-annotation-layer.c:destroy",
+                        "enter", layer->actor ? 1 : 0,
+                        layer->surface ? 1 : 0, 0, 0);
+  /* #endregion */
+
   stage = meta_backend_get_stage (layer->backend);
 
   g_clear_signal_handler (&layer->width_notify_id, stage);
   g_clear_signal_handler (&layer->height_notify_id, stage);
 
-  if (layer->actor)
-    clutter_actor_set_content (layer->actor, NULL);
-  g_clear_object (&layer->content);
   g_clear_pointer (&layer->surface, cairo_surface_destroy);
   g_clear_pointer (&layer->actor, clutter_actor_destroy);
   g_clear_object (&layer->backend);
