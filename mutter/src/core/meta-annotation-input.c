@@ -162,6 +162,33 @@ meta_annotation_input_skip_pointer_motion_coalesced (ClutterInputDevice     *dev
     return TRUE;
   if (!g_atomic_int_get (&annotation_non_mouse_isolated))
     return FALSE;
+
+  /* Tablet-class devices never update priv->pointer_state, but they still
+   * emitted POINTER_POSITION_CHANGED_IN_IMPL when freeze was always FALSE,
+   * so the core pointer followed the pen. Freeze while annotations isolate
+   * non-mouse overlay input. */
+  if (device)
+    {
+      ClutterInputDeviceType t = clutter_input_device_get_device_type (device);
+
+      if (t == CLUTTER_TABLET_DEVICE ||
+          t == CLUTTER_PEN_DEVICE ||
+          t == CLUTTER_ERASER_DEVICE ||
+          t == CLUTTER_CURSOR_DEVICE)
+        {
+          /* #region agent log */
+          {
+            static guint tablet_freeze_log_counter = 0;
+
+            if ((++tablet_freeze_log_counter % 25) == 1)
+              annotation_input_agent_log ("H_tablet_freeze", "skip_motion_coalesced_tablet_class",
+                                          (int) t, 1, 0, 0);
+          }
+          /* #endregion */
+          return TRUE;
+        }
+    }
+
   if (!device || clutter_input_device_get_device_type (device) != CLUTTER_POINTER_DEVICE)
     return FALSE;
   if (clutter_input_device_get_capabilities (device) & CLUTTER_INPUT_CAPABILITY_TOUCHPAD)

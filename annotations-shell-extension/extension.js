@@ -1,5 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 
+import './stylesheet.css';
+
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import St from 'gi://St';
@@ -89,21 +91,46 @@ export default class AnnotationExtension extends Extension {
             if (!mon || mon.width < 1 || mon.height < 1)
                 return;
             const {x, y, width, height} = mon;
+            const dw = this._dock.width > 0 ? this._dock.width : 1;
+            const dh = this._dock.height > 0 ? this._dock.height : 1;
             this._dock.set_position(
-                Math.round(x + (width - this._dock.width) / 2),
-                Math.round(y + height - this._dock.height - 24));
+                Math.round(x + (width - dw) / 2),
+                Math.round(y + height - dh - 24));
         };
 
-        this._monitorsId = Main.layoutManager.connect('monitors-changed', () => this._positionDock());
-        this._idlePos = GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+        this._monitorsId = Main.layoutManager.connect('monitors-changed', () => {
             this._positionDock();
+        });
+
+        this._allocId = this._dock.connect('notify::allocation', () => {
+            this._positionDock();
+        });
+
+        this._dockRetry = 0;
+        const schedulePositionRetries = () => {
+            this._positionDock();
+            if ((!Main.layoutManager.primaryMonitor ||
+                this._dock.width < 8) &&
+                this._dockRetry < 40) {
+                this._dockRetry++;
+                GLib.timeout_add(GLib.PRIORITY_LOW, 100, () => {
+                    schedulePositionRetries();
+                    return GLib.SOURCE_REMOVE;
+                });
+            }
+        };
+        this._idlePos = GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+            schedulePositionRetries();
             this._idlePos = 0;
             return GLib.SOURCE_REMOVE;
         });
 
         dbusCall('SetActive', new GLib.Variant('(b)', [true]), err => {
-            if (err)
-                console.warn(`Annotation SetActive(true): ${err.message}`);
+            if (err) {
+                console.error(
+                    `Annotation SetActive(true) failed: ${err.message}. ` +
+                    'Install the patched mutter from this project; stock mutter has no org.gnome.Mutter.Annotation.');
+            }
         });
     }
 
@@ -117,6 +144,10 @@ export default class AnnotationExtension extends Extension {
         if (this._idlePos)
             GLib.source_remove(this._idlePos);
         this._idlePos = 0;
+        if (this._allocId) {
+            this._dock.disconnect(this._allocId);
+            this._allocId = 0;
+        }
         this._dock.destroy();
         this._dock = null;
     }

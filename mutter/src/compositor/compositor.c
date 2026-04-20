@@ -57,6 +57,8 @@
 #include "core/meta-annotation-dbus.h"
 #include "core/meta-annotation-input.h"
 
+#include <stdio.h>
+
 #include "clutter/clutter-mutter.h"
 #include "cogl/cogl.h"
 #include "compositor/meta-cullable.h"
@@ -1805,19 +1807,90 @@ meta_compositor_get_annotation_layer (MetaCompositor *compositor)
   return meta_annotation_layer_get_actor (priv->annotation_layer);
 }
 
+/* #region agent log */
+static void
+annotation_route_agent_log (const char *hypothesis_id,
+                            const char  *message,
+                            int           a,
+                            int           b,
+                            int           c,
+                            int           d)
+{
+  FILE *f = fopen ("/home/eochis/Projects/annotations/.cursor/debug-338895.log", "a");
+
+  if (!f)
+    f = fopen ("/tmp/mutter-debug-338895.ndjson", "a");
+  if (!f)
+    return;
+
+  fprintf (f,
+           "{\"sessionId\":\"338895\",\"hypothesisId\":\"%s\",\"location\":\"compositor.c:route_annotation\","
+           "\"message\":\"%s\",\"data\":{\"a\":%d,\"b\":%d,\"c\":%d,\"d\":%d},\"timestamp\":%" G_GINT64_FORMAT "}\n",
+           hypothesis_id, message, a, b, c, d,
+           (gint64) g_get_monotonic_time ());
+  fflush (f);
+  fclose (f);
+}
+
+/* #endregion */
+
 gboolean
 meta_compositor_route_annotation_event (MetaCompositor    *compositor,
                                         const ClutterEvent *event)
 {
   MetaCompositorPrivate *priv =
     meta_compositor_get_instance_private (compositor);
+  ClutterEventType et;
+  int dtype = -1;
+  gboolean overlay;
+  gboolean handled;
 
-  if (!priv->annotation_layer ||
-      !meta_annotation_layer_get_active (priv->annotation_layer))
-    return FALSE;
+  et = clutter_event_type (event);
+  {
+    ClutterInputDevice *dev = clutter_event_get_source_device (event);
 
-  if (!meta_annotation_event_targets_overlay (event))
-    return FALSE;
+    if (dev)
+      dtype = (int) clutter_input_device_get_device_type (dev);
+  }
+  overlay = meta_annotation_event_targets_overlay (event);
 
-  return meta_annotation_layer_handle_event (priv->annotation_layer, event);
+  if (!priv->annotation_layer)
+    {
+      /* #region agent log */
+      if (et == CLUTTER_TOUCH_BEGIN || et == CLUTTER_TOUCH_UPDATE ||
+          et == CLUTTER_MOTION)
+        annotation_route_agent_log ("H_route", "no_annotation_layer", (int) et, dtype, overlay ? 1 : 0, 0);
+      /* #endregion */
+      return FALSE;
+    }
+
+  if (!meta_annotation_layer_get_active (priv->annotation_layer))
+    {
+      /* #region agent log */
+      if (et == CLUTTER_TOUCH_BEGIN || et == CLUTTER_TOUCH_UPDATE ||
+          et == CLUTTER_MOTION)
+        annotation_route_agent_log ("H_route", "annotation_inactive", (int) et, dtype, overlay ? 1 : 0, 0);
+      /* #endregion */
+      return FALSE;
+    }
+
+  if (!overlay)
+    {
+      /* #region agent log */
+      if (et == CLUTTER_TOUCH_BEGIN || et == CLUTTER_TOUCH_UPDATE ||
+          et == CLUTTER_MOTION)
+        annotation_route_agent_log ("H_route", "not_targets_overlay", (int) et, dtype, 0, 0);
+      /* #endregion */
+      return FALSE;
+    }
+
+  handled = meta_annotation_layer_handle_event (priv->annotation_layer, event);
+
+  /* #region agent log */
+  if (et == CLUTTER_TOUCH_BEGIN || et == CLUTTER_TOUCH_UPDATE ||
+      et == CLUTTER_TOUCH_END || et == CLUTTER_MOTION)
+    annotation_route_agent_log ("H_route", "routed_to_layer", (int) et, dtype, overlay ? 1 : 0, handled ? 1 : 0);
+  /* #endregion */
+
+  return handled;
 }

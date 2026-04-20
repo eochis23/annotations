@@ -3,6 +3,6 @@
   "name": "Annotations",
   "description": "Dock for compositor annotation colors and clear-all (Mutter org.gnome.Mutter.Annotation).",
   "version": 1,
-  "shell-version": ["50"],
+  "shell-version": ["47", "48", "49", "50"],
   "session-modes": ["user", "gdm", "unlock-dialog"]
 }

@@ -284,6 +284,12 @@ meta_display_handle_event (MetaDisplay        *display,
   if (stage_has_grab (display))
     return CLUTTER_EVENT_PROPAGATE;
 
+  /* Route overlay drawing before ungrabbed window handling so touch/pen
+   * cannot be short-circuited by focus/raise paths and matches user
+   * expectation that annotation mode captures those events first. */
+  if (meta_compositor_route_annotation_event (compositor, event))
+    return CLUTTER_EVENT_STOP;
+
   if (window)
     {
       if (meta_window_handle_ungrabbed_event (window, event))
@@ -302,9 +308,6 @@ meta_display_handle_event (MetaDisplay        *display,
   if (window && event_type == CLUTTER_MOTION &&
       time_ms != CLUTTER_CURRENT_TIME)
     meta_window_check_alive_on_event (window, time_ms);
-
-  if (meta_compositor_route_annotation_event (compositor, event))
-    return CLUTTER_EVENT_STOP;
 
   if (meta_wayland_compositor_handle_event (wayland_compositor, event))
     return CLUTTER_EVENT_STOP;
