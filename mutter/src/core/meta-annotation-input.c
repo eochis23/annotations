@@ -15,6 +15,22 @@
  * Written from the main thread; read from the input thread (atomic). */
 static volatile gint annotation_non_mouse_isolated = 0;
 
+/* Integrated pens often appear as a tablet device plus a separate POINTER node
+ * in the same libinput device group; the latter mirrors hover without pressure
+ * and bypasses name heuristics. Track recent tablet-family motion by group. */
+static GMutex        annotation_tablet_group_mutex;
+static gboolean      annotation_tablet_group_valid;
+static gint64        annotation_tablet_group_id;
+static gboolean      annotation_tablet_xy_valid;
+static gfloat        annotation_last_tablet_x;
+static gfloat        annotation_last_tablet_y;
+static gint64        annotation_tablet_monotonic_us;
+
+#define ANNOTATION_TABLET_GROUP_COALESCE_USEC (200 * G_TIME_SPAN_MILLISECOND)
+#define ANNOTATION_TABLET_PROXIMITY_TIME_USEC  (400 * G_TIME_SPAN_MILLISECOND)
+#define ANNOTATION_TABLET_PROXIMITY_DIST2      (200.0f * 200.0f)
+#define ANNOTATION_UNKNOWN_LIBINPUT_GROUP       ((gint64) -1)
+
 /* #region agent log */
 void
 meta_annotation_debug_append_ndjson (const gchar *hypothesis_id,
@@ -75,6 +91,34 @@ void
 meta_annotation_input_set_non_mouse_pointer_isolated (gboolean isolated)
 {
   g_atomic_int_set (&annotation_non_mouse_isolated, isolated ? 1 : 0);
+  if (!isolated)
+    {
+      g_mutex_lock (&annotation_tablet_group_mutex);
+      annotation_tablet_group_valid = FALSE;
+      annotation_tablet_xy_valid = FALSE;
+      g_mutex_unlock (&annotation_tablet_group_mutex);
+    }
+}
+
+void
+meta_annotation_input_note_tablet_family_motion (gint64 libinput_device_group,
+                                                 float  x,
+                                                 float  y)
+{
+  if (!g_atomic_int_get (&annotation_non_mouse_isolated))
+    return;
+
+  g_mutex_lock (&annotation_tablet_group_mutex);
+  annotation_tablet_xy_valid = TRUE;
+  annotation_last_tablet_x = x;
+  annotation_last_tablet_y = y;
+  annotation_tablet_monotonic_us = g_get_monotonic_time ();
+  if (libinput_device_group != ANNOTATION_UNKNOWN_LIBINPUT_GROUP)
+    {
+      annotation_tablet_group_valid = TRUE;
+      annotation_tablet_group_id = libinput_device_group;
+    }
+  g_mutex_unlock (&annotation_tablet_group_mutex);
 }
 
 static gboolean
@@ -175,12 +219,85 @@ pointer_device_matches_annotation_pointer (ClutterInputDevice     *device,
 gboolean
 meta_annotation_input_skip_master_pointer_update (ClutterInputDevice     *device,
                                                   ClutterInputDeviceTool *tool,
-                                                  const double            *motion_axes)
+                                                  const double            *motion_axes,
+                                                  gint64                  libinput_device_group,
+                                                  float                   pointer_pos_x,
+                                                  float                   pointer_pos_y)
 {
   if (!g_atomic_int_get (&annotation_non_mouse_isolated))
     return FALSE;
   if (!device)
     return FALSE;
+
+  if (clutter_input_device_get_device_type (device) == CLUTTER_POINTER_DEVICE &&
+      libinput_device_group != ANNOTATION_UNKNOWN_LIBINPUT_GROUP)
+    {
+      gboolean same_group = FALSE;
+      gint64 age = 0;
+
+      g_mutex_lock (&annotation_tablet_group_mutex);
+      if (annotation_tablet_group_valid &&
+          annotation_tablet_group_id == libinput_device_group)
+        {
+          gint64 now = g_get_monotonic_time ();
+
+          age = now - annotation_tablet_monotonic_us;
+          if (age >= 0 && age < ANNOTATION_TABLET_GROUP_COALESCE_USEC)
+            same_group = TRUE;
+        }
+      g_mutex_unlock (&annotation_tablet_group_mutex);
+
+      if (same_group)
+        {
+          /* #region agent log */
+          annotation_input_agent_log ("H_group_ptr", "skip_master_tablet_group",
+                                      (int) (libinput_device_group & G_MAXINT),
+                                      (int) (age > G_MAXINT ? G_MAXINT : age),
+                                      1, 0);
+          /* #endregion */
+          return TRUE;
+        }
+    }
+
+  /* Some machines expose pen as TABLET and a separate POINTER “mouse” that is
+   * not in the same libinput device group; positions still track in screen space. */
+  if (clutter_input_device_get_device_type (device) == CLUTTER_POINTER_DEVICE &&
+      (clutter_input_device_get_capabilities (device) & CLUTTER_INPUT_CAPABILITY_TOUCHPAD) == 0)
+    {
+      gboolean near_tablet = FALSE;
+      gint64 age = 0;
+      gfloat dx, dy, d2;
+
+      g_mutex_lock (&annotation_tablet_group_mutex);
+      if (annotation_tablet_xy_valid)
+        {
+          gint64 now = g_get_monotonic_time ();
+
+          age = now - annotation_tablet_monotonic_us;
+          if (age >= 0 && age < ANNOTATION_TABLET_PROXIMITY_TIME_USEC)
+            {
+              dx = pointer_pos_x - annotation_last_tablet_x;
+              dy = pointer_pos_y - annotation_last_tablet_y;
+              d2 = dx * dx + dy * dy;
+              if (d2 <= ANNOTATION_TABLET_PROXIMITY_DIST2)
+                near_tablet = TRUE;
+            }
+        }
+      g_mutex_unlock (&annotation_tablet_group_mutex);
+
+      if (near_tablet)
+        {
+          /* #region agent log */
+          annotation_input_agent_log ("H_prox_ptr", "skip_master_near_tablet",
+                                      (int) (dx > 0 ? dx + 0.5f : dx - 0.5f),
+                                      (int) (dy > 0 ? dy + 0.5f : dy - 0.5f),
+                                      (int) (age > G_MAXINT ? G_MAXINT : age),
+                                      1);
+          /* #endregion */
+          return TRUE;
+        }
+    }
+
   if (clutter_input_device_get_device_type (device) != CLUTTER_POINTER_DEVICE)
     return FALSE;
 
@@ -189,10 +306,16 @@ meta_annotation_input_skip_master_pointer_update (ClutterInputDevice     *device
 
 gboolean
 meta_annotation_input_skip_pointer_motion_coalesced (ClutterInputDevice     *device,
-                                                     ClutterInputDeviceTool *tool,
-                                                     const double            *motion_axes)
+                                                      ClutterInputDeviceTool *tool,
+                                                      const double            *motion_axes,
+                                                      gint64                  libinput_device_group,
+                                                      float                   pointer_pos_x,
+                                                      float                   pointer_pos_y)
 {
-  if (meta_annotation_input_skip_master_pointer_update (device, tool, motion_axes))
+  if (meta_annotation_input_skip_master_pointer_update (device, tool, motion_axes,
+                                                        libinput_device_group,
+                                                        pointer_pos_x,
+                                                        pointer_pos_y))
     return TRUE;
   if (!g_atomic_int_get (&annotation_non_mouse_isolated))
     return FALSE;

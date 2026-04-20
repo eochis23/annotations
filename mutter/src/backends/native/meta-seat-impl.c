@@ -918,10 +918,30 @@ meta_seat_impl_notify_relative_motion_in_impl (MetaSeatImpl       *seat_impl,
   dy_constrained = new_coords.y - coords.y;
 
   {
-    gboolean freeze_cursor =
+    gint64 annotation_libinput_group = -1;
+    gboolean freeze_cursor;
+
+    if (META_IS_INPUT_DEVICE_NATIVE (input_device))
+      annotation_libinput_group = (gint64) device_native->group;
+
+    {
+      ClutterInputDeviceType motion_dt =
+        clutter_input_device_get_device_type (input_device);
+
+      if (motion_dt == CLUTTER_TABLET_DEVICE ||
+          motion_dt == CLUTTER_PEN_DEVICE ||
+          motion_dt == CLUTTER_ERASER_DEVICE ||
+          motion_dt == CLUTTER_CURSOR_DEVICE)
+        meta_annotation_input_note_tablet_family_motion (annotation_libinput_group,
+                                                         new_coords.x, new_coords.y);
+    }
+
+    freeze_cursor =
       meta_annotation_input_skip_pointer_motion_coalesced (input_device,
                                                            device_native->last_tool,
-                                                           axes);
+                                                           axes,
+                                                           annotation_libinput_group,
+                                                           new_coords.x, new_coords.y);
 
     update_device_coords_in_impl (seat_impl, input_device, new_coords, freeze_cursor);
 
@@ -969,10 +989,30 @@ meta_seat_impl_notify_absolute_motion_in_impl (MetaSeatImpl       *seat_impl,
   constrain_coordinates (seat_impl, input_device, time_us, coords, &new_coords);
 
   {
-    gboolean freeze_cursor =
+    gint64 annotation_libinput_group = -1;
+    gboolean freeze_cursor;
+
+    if (META_IS_INPUT_DEVICE_NATIVE (input_device))
+      annotation_libinput_group = (gint64) device_native->group;
+
+    {
+      ClutterInputDeviceType motion_dt =
+        clutter_input_device_get_device_type (input_device);
+
+      if (motion_dt == CLUTTER_TABLET_DEVICE ||
+          motion_dt == CLUTTER_PEN_DEVICE ||
+          motion_dt == CLUTTER_ERASER_DEVICE ||
+          motion_dt == CLUTTER_CURSOR_DEVICE)
+        meta_annotation_input_note_tablet_family_motion (annotation_libinput_group,
+                                                         new_coords.x, new_coords.y);
+    }
+
+    freeze_cursor =
       meta_annotation_input_skip_pointer_motion_coalesced (input_device,
                                                            device_native->last_tool,
-                                                           axes);
+                                                           axes,
+                                                           annotation_libinput_group,
+                                                           new_coords.x, new_coords.y);
 
     update_device_coords_in_impl (seat_impl, input_device, new_coords, freeze_cursor);
 
