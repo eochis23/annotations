@@ -38,5 +38,5 @@ asciidoc
 # If you set CHROOT_MUTTER_MESON_SETUP_EXTRA=-Dtests=enabled, add test helpers:
 python-dbusmock
 
-#misc
-rst2man
+# doc/man: Meson looks for rst2man (from python-docutils, not a package named rst2man)
+python-docutils
