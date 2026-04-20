@@ -50,7 +50,7 @@ CHROOT_REPO_DIR="/mnt/build/annotations"
 # install_second_partition.sh also builds mutter (and gnome-shell if BUILD_TARGETS includes shell).
 # When this project is not a git checkout on the host, set:
 # INSTALL_GIT_REMOTE="https://github.com/you/annotations.git"
-# INSTALL_BRANCH="mutter_exploration"
+# INSTALL_BRANCH="main"
 
 # Optional: force the URL used for chroot fetch (overrides SSH→HTTPS conversion):
 # CHROOT_FETCH_URL="https://github.com/you/annotations.git"
