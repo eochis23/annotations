@@ -32,8 +32,11 @@ umockdev
 sysprof
 
 # When BUILD_TARGETS includes shell, uncomment or add as needed, e.g.:
-# sassc
-# asciidoc
+sassc
+asciidoc
 
 # If you set CHROOT_MUTTER_MESON_SETUP_EXTRA=-Dtests=enabled, add test helpers:
-# python-dbusmock
+python-dbusmock
+
+#misc
+rst2man
