@@ -936,6 +936,12 @@ meta_seat_impl_notify_relative_motion_in_impl (MetaSeatImpl       *seat_impl,
                                                          new_coords.x, new_coords.y);
     }
 
+    meta_annotation_input_note_from_pointer_if_stylus_class (input_device,
+                                                             device_native->last_tool,
+                                                             axes,
+                                                             annotation_libinput_group,
+                                                             new_coords.x, new_coords.y);
+
     freeze_cursor =
       meta_annotation_input_skip_pointer_motion_coalesced (input_device,
                                                            device_native->last_tool,
@@ -1009,6 +1015,12 @@ meta_seat_impl_notify_absolute_motion_in_impl (MetaSeatImpl       *seat_impl,
         meta_annotation_input_note_tablet_family_motion (annotation_libinput_group,
                                                          new_coords.x, new_coords.y);
     }
+
+    meta_annotation_input_note_from_pointer_if_stylus_class (input_device,
+                                                             device_native->last_tool,
+                                                             axes,
+                                                             annotation_libinput_group,
+                                                             new_coords.x, new_coords.y);
 
     freeze_cursor =
       meta_annotation_input_skip_pointer_motion_coalesced (input_device,

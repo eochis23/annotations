@@ -21,6 +21,13 @@ void     meta_annotation_input_note_tablet_family_motion (gint64 libinput_device
                                                           float  x,
                                                           float  y);
 
+void     meta_annotation_input_note_from_pointer_if_stylus_class (ClutterInputDevice     *device,
+                                                                 ClutterInputDeviceTool *tool,
+                                                                 const double            *axes,
+                                                                 gint64                  libinput_device_group,
+                                                                 float                   x,
+                                                                 float                   y);
+
 gboolean meta_annotation_input_skip_master_pointer_update (ClutterInputDevice     *device,
                                                            ClutterInputDeviceTool *tool,
                                                            const double            *motion_axes,
