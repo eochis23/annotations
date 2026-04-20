@@ -934,6 +934,11 @@ meta_seat_impl_notify_relative_motion_in_impl (MetaSeatImpl       *seat_impl,
           motion_dt == CLUTTER_CURSOR_DEVICE)
         meta_annotation_input_note_tablet_family_motion (annotation_libinput_group,
                                                          new_coords.x, new_coords.y);
+      else if (motion_dt == CLUTTER_TOUCHPAD_DEVICE &&
+               meta_annotation_input_touchpad_is_pen_digitizer_shim (input_device,
+                                                                     device_native->last_tool))
+        meta_annotation_input_note_tablet_family_motion (annotation_libinput_group,
+                                                         new_coords.x, new_coords.y);
     }
 
     meta_annotation_input_note_from_pointer_if_stylus_class (input_device,
@@ -1012,6 +1017,11 @@ meta_seat_impl_notify_absolute_motion_in_impl (MetaSeatImpl       *seat_impl,
           motion_dt == CLUTTER_PEN_DEVICE ||
           motion_dt == CLUTTER_ERASER_DEVICE ||
           motion_dt == CLUTTER_CURSOR_DEVICE)
+        meta_annotation_input_note_tablet_family_motion (annotation_libinput_group,
+                                                         new_coords.x, new_coords.y);
+      else if (motion_dt == CLUTTER_TOUCHPAD_DEVICE &&
+               meta_annotation_input_touchpad_is_pen_digitizer_shim (input_device,
+                                                                     device_native->last_tool))
         meta_annotation_input_note_tablet_family_motion (annotation_libinput_group,
                                                          new_coords.x, new_coords.y);
     }

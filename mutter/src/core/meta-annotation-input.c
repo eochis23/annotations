@@ -169,6 +169,44 @@ tool_is_drawing_stylus (ClutterInputDeviceTool *tool)
     }
 }
 
+gboolean
+meta_annotation_input_touchpad_is_pen_digitizer_shim (ClutterInputDevice     *device,
+                                                      ClutterInputDeviceTool *tool)
+{
+  ClutterInputCapabilities caps;
+  unsigned int dw, dh;
+  const char *name;
+  g_autofree gchar *l = NULL;
+
+  if (!device || clutter_input_device_get_device_type (device) != CLUTTER_TOUCHPAD_DEVICE)
+    return FALSE;
+
+  caps = clutter_input_device_get_capabilities (device);
+  if (caps & CLUTTER_INPUT_CAPABILITY_TABLET_TOOL)
+    return TRUE;
+  if (tool_is_drawing_stylus (tool))
+    return TRUE;
+  if (clutter_input_device_get_dimensions (device, &dw, &dh) && dw > 0 && dh > 0)
+    return TRUE;
+
+  /* libinput sometimes labels the integrated pen path as “touchpad”; avoid generic
+   * “elan” here so laptop trackpads are not mistaken for the pen. */
+  name = clutter_input_device_get_device_name (device);
+  if (name && name[0] != '\0')
+    {
+      l = g_utf8_strdown (name, -1);
+      if (strstr (l, "stylus") != NULL ||
+          strstr (l, "digitizer") != NULL ||
+          strstr (l, "wacom") != NULL ||
+          strstr (l, "ntrig") != NULL ||
+          strstr (l, "surface pen") != NULL ||
+          strstr (l, "ms pen") != NULL)
+        return TRUE;
+    }
+
+  return FALSE;
+}
+
 void
 meta_annotation_input_note_from_pointer_if_stylus_class (ClutterInputDevice     *device,
                                                           ClutterInputDeviceTool *tool,
@@ -288,6 +326,23 @@ meta_annotation_input_skip_master_pointer_update (ClutterInputDevice     *device
 
   (void) libinput_device_group;
 
+  /* libinput may expose the pen path as CLUTTER_TOUCHPAD_DEVICE (see logs: dtype 5). */
+  if (meta_annotation_input_touchpad_is_pen_digitizer_shim (device, tool))
+    {
+      /* #region agent log */
+      {
+        static guint shim_log;
+
+        if ((++shim_log % 80) == 1)
+          annotation_input_agent_log ("H_tp_shim", "skip_master_touchpad_pen_shim",
+                                      (int) clutter_input_device_get_device_type (device),
+                                      tool ? (int) clutter_input_device_tool_get_tool_type (tool) : -1,
+                                      1, 0);
+      }
+      /* #endregion */
+      return TRUE;
+    }
+
   /* Sibling “mouse” POINTER: freeze while we recently saw tablet or stylus-class motion. */
   if (clutter_input_device_get_device_type (device) == CLUTTER_POINTER_DEVICE &&
       (clutter_input_device_get_capabilities (device) & CLUTTER_INPUT_CAPABILITY_TOUCHPAD) == 0)
@@ -338,6 +393,9 @@ meta_annotation_input_skip_pointer_motion_coalesced (ClutterInputDevice     *dev
     return TRUE;
   if (!g_atomic_int_get (&annotation_non_mouse_isolated))
     return FALSE;
+
+  if (device && meta_annotation_input_touchpad_is_pen_digitizer_shim (device, tool))
+    return TRUE;
 
   /* Tablet-class devices never update priv->pointer_state, but they still
    * emitted POINTER_POSITION_CHANGED_IN_IMPL when freeze was always FALSE,
@@ -433,6 +491,10 @@ meta_annotation_event_targets_overlay (const ClutterEvent *event)
       break;
 
     case CLUTTER_TOUCHPAD_DEVICE:
+      overlay = meta_annotation_input_touchpad_is_pen_digitizer_shim (
+        device, clutter_event_get_device_tool (event));
+      break;
+
     case CLUTTER_KEYBOARD_DEVICE:
     case CLUTTER_PAD_DEVICE:
     case CLUTTER_EXTENSION_DEVICE:
