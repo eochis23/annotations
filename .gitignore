@@ -1,1 +1,4 @@
 compile_target.local.sh
+
+# Meson subproject wrap lock (created during configure; must not block git checkout)
+mutter/subprojects/.wraplock
