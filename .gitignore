@@ -11,3 +11,8 @@ bin/anno-motion
 # Local upstream clones (see scripts/clone-sources.sh)
 mutter-src/
 gnome-shell-src/
+
+compile_target.local.sh
+
+# Meson subproject wrap lock (created during configure; must not block git checkout)
+mutter/subprojects/.wraplock

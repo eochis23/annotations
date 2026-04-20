@@ -131,3 +131,65 @@ Let's have debugging messages inside those functions so we can see exactly what'
 ## 15
 
 Let's work on the next step in the plan. I want you to make sure that when the annotation layer is open, only the pen can interact with it and that everything else interacts with the rest of the desktop like normal
+
+---
+
+## 16
+
+I don't need a legacy build mode. just make sure everything works with the best method possible
+
+---
+
+## 17
+
+is it ready to run?
+
+---
+
+## 18
+
+how do I do 1. when I can't see get it to display anything on the second partition?
+
+---
+
+## 19
+
+give me the command to run the file please
+
+---
+
+## 20
+
+I saw this: Success! Installed under /run/media/eric/endeavouros/usr (targets: mutter). Unmounting /run/media/eric/endeavouros... Does that mean that it'll work when I open the other partition?
+
+---
+
+## 21
+
+help me clear out all partitions I'm not using
+
+---
+
+## 22
+
+plan writing a version of compile_target with that does everything with chroot so it's compiled as if it's on the installation on the second partition. When running, it should commit to the git repository from this folder, push, chroot into the other partition, then pull from this branch of this repository and compile and install the versions of mutter and gnome-shell from there
+
+##23
+
+make this project be one that has an install script that will make it run as a git repository when downloaded and installed with an install script, then have a second script that will make that happen on the second partition
+
+##24
+
+can you have a requirements file that will help it install needed requirements like a real package?
+
+##25
+
+I ran it and everything compiled and I got the success message, however when I opened the second partition, there was an underscore in the top left when I started it and nothing else happened. I verified that the mutter and gnome-shell versions here are the same as the originals there and that it worked before. Discuss reasons this might be happening
+
+##25
+
+Now, let's plan the rest of this project that's an annotation shell extension for gnome where we modify mutter and clutter to make sure that any pointer input except for mouse input is directed at the annotation layer above all the content, and the mouse interacts with windows underneath like normal. The layer should have a dock with colors and a trash can button representing clearing all. It should install as part of the install script and be activated by that as well
+
+##26
+
+Make a detailed file documenting all of the changes you made to mutter

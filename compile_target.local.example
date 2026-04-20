@@ -1,0 +1,60 @@
+# Copy to compile_target.local.sh next to compile_target.sh and edit for your machine.
+# compile_target.local.sh is gitignored.
+
+MUTTER_SRC="/home/you/Projects/annotations/mutter"
+# Required only when BUILD_TARGETS includes shell:
+SHELL_SRC="/home/you/Projects/annotations/gnome-shell"
+
+# Mounted target root (build runs inside this tree via arch-chroot).
+MOUNT_POINT="/run/media/you/volume"
+
+# Identify the block device (use ONE primary method):
+# - Two copies of the same OS often share LABEL= — by-label is ambiguous. Prefer:
+# PARTITION_PARTUUID="00000000-0000-4000-8000-000000000000"
+# PARTITION_DEVICE="/dev/nvme0n1p3"
+# - Or a unique filesystem label only on this copy:
+# PARTITION_FS_LABEL="your-root-label"
+PARTITION_FS_LABEL="your-root-label"
+
+# mutter (default) or mutter,shell
+# BUILD_TARGETS=mutter,shell
+
+# Before deps: pacman -Sy in chroot (if sync DB is stale / pacman -Si mutter fails).
+# CHROOT_PACMAN_SYNC=1
+
+# Extra pacman packages for chroot builds: edit scripts/chroot-build-requirements.txt, or set:
+# CHROOT_BUILD_REQUIREMENTS="/path/to/your-requirements.txt"
+
+# Meson in chroot (defaults skip tests / dbusmock). To run mutter tests, install python-dbusmock and e.g.:
+# CHROOT_MUTTER_MESON_SETUP_EXTRA="-Dtests=enabled"
+# CHROOT_SHELL_MESON_SETUP_EXTRA="-Dtests=true"
+
+# Manual: inside arch-chroot as root, install.sh can install all chroot build packages:
+#   bash /mnt/build/annotations-install.sh --install-chroot-build-deps --yes
+# Edit scripts/chroot-build-requirements.txt to add missing pacman names when Meson reports a dependency.
+
+# Rollback distro packages on the mounted root (from host), e.g.:
+#   sudo arch-chroot /run/media/you/volume pacman -S --noconfirm mutter
+#   sudo arch-chroot /run/media/you/volume pacman -S --noconfirm gnome-shell
+
+# --- compile_target_chroot_git.sh only ---
+# Clone path *inside the chroot* (on the mounted root). Must be writable.
+CHROOT_REPO_DIR="/mnt/build/annotations"
+
+# Remote used for host `git push` (inside chroot, fetch always uses remote name "origin").
+# GIT_REMOTE_NAME=origin
+
+# If HEAD is detached on the host, set an explicit branch name for push + chroot sync:
+# OVERRIDE_BRANCH=main
+
+# install_second_partition.sh also builds mutter (and gnome-shell if BUILD_TARGETS includes shell).
+# When this project is not a git checkout on the host, set:
+# INSTALL_GIT_REMOTE="https://github.com/you/annotations.git"
+# INSTALL_BRANCH="main"
+
+# Optional: force the URL used for chroot fetch (overrides SSH→HTTPS conversion):
+# CHROOT_FETCH_URL="https://github.com/you/annotations.git"
+
+# For git@... remotes without CHROOT_FETCH_URL, bind-mount host SSH keys (optional):
+# SSH_BIND=1
+# HOST_SSH_DIR="/home/you/.ssh"
