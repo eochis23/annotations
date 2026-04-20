@@ -52,12 +52,71 @@ function removeSource(id) {
 }
 
 export default class AnnotationExtension extends Extension {
+    _trySetAnnotationActive() {
+        dbusCall('SetActive', new GLib.Variant('(b)', [true]), err => {
+            if (!err) {
+                this._annotationSessionActiveOk = true;
+                return;
+            }
+            if (!this._dock)
+                return;
+            console.warn(
+                `Annotation SetActive(true): ${err.message} ` +
+                '(waiting for org.gnome.Mutter.Annotation on the session bus)');
+        });
+    }
+
+    _startAnnotationActivation() {
+        /* Mutter owns the name asynchronously; immediate SetActive often races. */
+        this._annotationSessionActiveOk = false;
+        this._setActiveRetryCount = 0;
+
+        this._trySetAnnotationActive();
+
+        if (!this._annotationBusWatchId) {
+            this._annotationBusWatchId = Gio.bus_watch_name(
+                Gio.BusType.SESSION,
+                BUS,
+                Gio.BusNameWatcherFlags.NONE,
+                (conn, name, owner) => {
+                    if (owner && owner.length > 0)
+                        this._trySetAnnotationActive();
+                },
+                null);
+        }
+
+        this._setActiveRetryId = removeSource(this._setActiveRetryId);
+        this._setActiveRetryId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 300, () => {
+            if (!this._dock) {
+                this._setActiveRetryId = 0;
+                return GLib.SOURCE_REMOVE;
+            }
+            if (this._annotationSessionActiveOk) {
+                this._setActiveRetryId = 0;
+                return GLib.SOURCE_REMOVE;
+            }
+            if (this._setActiveRetryCount++ >= 40) {
+                console.error(
+                    'Annotation SetActive(true) still failing after ~12s of retries. ' +
+                    'Use a Mutter build from the annotations project (org.gnome.Mutter.Annotation D-Bus).');
+                this._setActiveRetryId = 0;
+                return GLib.SOURCE_REMOVE;
+            }
+            this._trySetAnnotationActive();
+            return GLib.SOURCE_CONTINUE;
+        });
+    }
+
     enable() {
         this._dockPositionTimeout = 0;
         this._idlePos = 0;
         this._monitorsId = 0;
         this._allocId = 0;
         this._dockRetry = 0;
+        this._annotationBusWatchId = 0;
+        this._setActiveRetryId = 0;
+        this._setActiveRetryCount = 0;
+        this._annotationSessionActiveOk = false;
 
         this._dock = new St.BoxLayout({
             style_class: 'annotation-dock',
@@ -146,16 +205,16 @@ export default class AnnotationExtension extends Extension {
             return GLib.SOURCE_REMOVE;
         });
 
-        dbusCall('SetActive', new GLib.Variant('(b)', [true]), err => {
-            if (err) {
-                console.error(
-                    `Annotation SetActive(true) failed: ${err.message}. ` +
-                    'Install the patched mutter from this project; stock mutter has no org.gnome.Mutter.Annotation.');
-            }
-        });
+        this._startAnnotationActivation();
     }
 
     disable() {
+        if (this._annotationBusWatchId) {
+            Gio.bus_unwatch_name(this._annotationBusWatchId);
+            this._annotationBusWatchId = 0;
+        }
+        this._setActiveRetryId = removeSource(this._setActiveRetryId);
+
         dbusCall('SetActive', new GLib.Variant('(b)', [false]), null);
 
         this._idlePos = removeSource(this._idlePos);

@@ -13,35 +13,18 @@
 
 #include <cairo.h>
 #include <math.h>
-#include <stdio.h>
 
 /* #region agent log */
-#define ANNOTATION_AGENT_LOG_PRIMARY "/home/eochis/Projects/annotations/.cursor/debug-338895.log"
-#define ANNOTATION_AGENT_LOG_FALLBACK "/tmp/mutter-debug-338895.ndjson"
-
 static void
 annotation_agent_log (const char *hypothesis_id,
-                        const char *location,
-                        const char *message,
-                        int           a,
-                        int           b,
-                        int           c,
-                        int           d)
+                      const char *location,
+                      const char *message,
+                      int           a,
+                      int           b,
+                      int           c,
+                      int           d)
 {
-  FILE *f = fopen (ANNOTATION_AGENT_LOG_PRIMARY, "a");
-
-  if (!f)
-    f = fopen (ANNOTATION_AGENT_LOG_FALLBACK, "a");
-  if (!f)
-    return;
-
-  fprintf (f,
-           "{\"sessionId\":\"338895\",\"hypothesisId\":\"%s\",\"location\":\"%s\",\"message\":\"%s\","
-           "\"data\":{\"a\":%d,\"b\":%d,\"c\":%d,\"d\":%d},\"timestamp\":%" G_GINT64_FORMAT "}\n",
-           hypothesis_id, location, message, a, b, c, d,
-           (gint64) g_get_monotonic_time ());
-  fflush (f);
-  fclose (f);
+  meta_annotation_debug_append_ndjson (hypothesis_id, location, message, a, b, c, d);
 }
 
 /* #endregion */

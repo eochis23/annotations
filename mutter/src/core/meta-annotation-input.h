@@ -5,6 +5,14 @@
 #include <glib.h>
 #include <clutter/clutter.h>
 
+void     meta_annotation_debug_append_ndjson (const gchar *hypothesis_id,
+                                              const gchar *location,
+                                              const gchar *message,
+                                              gint          a,
+                                              gint          b,
+                                              gint          c,
+                                              gint          d);
+
 gboolean meta_annotation_event_targets_overlay (const ClutterEvent *event);
 
 void     meta_annotation_input_set_non_mouse_pointer_isolated (gboolean isolated);

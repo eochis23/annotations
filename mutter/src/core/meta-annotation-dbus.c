@@ -5,6 +5,7 @@
 #include "core/meta-annotation-dbus.h"
 
 #include "compositor/meta-annotation-layer.h"
+#include "core/meta-annotation-input.h"
 
 struct _MetaAnnotationDBus
 {
@@ -46,6 +47,13 @@ handle_method_call (GDBusConnection       *connection,
 
       g_variant_get (parameters, "(b)", &active);
       meta_annotation_layer_set_active (dbus->layer, active);
+      /* #region agent log */
+      meta_annotation_debug_append_ndjson ("H_dbus", "meta-annotation-dbus.c:SetActive",
+                                           "SetActive_after_layer_set",
+                                           active ? 1 : 0,
+                                           meta_annotation_layer_get_active (dbus->layer) ? 1 : 0,
+                                           0, 0);
+      /* #endregion */
       g_dbus_method_invocation_return_value (invocation, NULL);
     }
   else if (g_strcmp0 (method_name, "SetColor") == 0)

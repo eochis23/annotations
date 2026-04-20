@@ -16,8 +16,45 @@
 static volatile gint annotation_non_mouse_isolated = 0;
 
 /* #region agent log */
-#define ANNOTATION_INPUT_LOG_PRIMARY "/home/eochis/Projects/annotations/.cursor/debug-338895.log"
-#define ANNOTATION_INPUT_LOG_FALLBACK "/tmp/mutter-debug-338895.ndjson"
+void
+meta_annotation_debug_append_ndjson (const gchar *hypothesis_id,
+                                     const gchar *location,
+                                     const gchar *message,
+                                     gint          a,
+                                     gint          b,
+                                     gint          c,
+                                     gint          d)
+{
+  g_autofree gchar *cache_path = NULL;
+  const gchar *pathv[4];
+  guint n;
+  guint i;
+
+  cache_path = g_build_filename (g_get_user_cache_dir (),
+                                 "mutter-annotation-338895.ndjson",
+                                 NULL);
+  pathv[0] = "/home/eochis/Projects/annotations/.cursor/debug-338895.log";
+  pathv[1] = "/tmp/mutter-debug-338895.ndjson";
+  pathv[2] = cache_path;
+  pathv[3] = NULL;
+  n = 3;
+
+  for (i = 0; i < n; i++)
+    {
+      FILE *f = fopen (pathv[i], "a");
+
+      if (!f)
+        continue;
+
+      fprintf (f,
+               "{\"sessionId\":\"338895\",\"hypothesisId\":\"%s\",\"location\":\"%s\",\"message\":\"%s\","
+               "\"data\":{\"a\":%d,\"b\":%d,\"c\":%d,\"d\":%d},\"timestamp\":%" G_GINT64_FORMAT "}\n",
+               hypothesis_id, location, message, a, b, c, d,
+               (gint64) g_get_monotonic_time ());
+      fflush (f);
+      fclose (f);
+    }
+}
 
 static void
 annotation_input_agent_log (const char *hypothesis_id,
@@ -27,20 +64,9 @@ annotation_input_agent_log (const char *hypothesis_id,
                             int           c,
                             int           d)
 {
-  FILE *f = fopen (ANNOTATION_INPUT_LOG_PRIMARY, "a");
-
-  if (!f)
-    f = fopen (ANNOTATION_INPUT_LOG_FALLBACK, "a");
-  if (!f)
-    return;
-
-  fprintf (f,
-           "{\"sessionId\":\"338895\",\"hypothesisId\":\"%s\",\"location\":\"meta-annotation-input.c\","
-           "\"message\":\"%s\",\"data\":{\"a\":%d,\"b\":%d,\"c\":%d,\"d\":%d},\"timestamp\":%" G_GINT64_FORMAT "}\n",
-           hypothesis_id, message, a, b, c, d,
-           (gint64) g_get_monotonic_time ());
-  fflush (f);
-  fclose (f);
+  meta_annotation_debug_append_ndjson (hypothesis_id,
+                                         "meta-annotation-input.c",
+                                         message, a, b, c, d);
 }
 
 /* #endregion */
