@@ -189,3 +189,7 @@ I ran it and everything compiled and I got the success message, however when I o
 ##25
 
 Now, let's plan the rest of this project that's an annotation shell extension for gnome where we modify mutter and clutter to make sure that any pointer input except for mouse input is directed at the annotation layer above all the content, and the mouse interacts with windows underneath like normal. The layer should have a dock with colors and a trash can button representing clearing all. It should install as part of the install script and be activated by that as well
+
+##26
+
+Make a detailed file documenting all of the changes you made to mutter
