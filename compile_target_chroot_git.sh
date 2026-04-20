@@ -25,6 +25,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOCAL_CONFIG="$SCRIPT_DIR/compile_target.local.sh"
 LIST_MUTTER_MAKEDEPENDS="$SCRIPT_DIR/scripts/list-mutter-makedepends.sh"
+CHROOT_BUILD_REQUIREMENTS="${CHROOT_BUILD_REQUIREMENTS:-$SCRIPT_DIR/scripts/chroot-build-requirements.txt}"
 ANNOTATIONS_GIT_URL_HELPER="$SCRIPT_DIR/scripts/annotations-git-url.sh"
 
 DO_COMMIT=0
@@ -199,6 +200,9 @@ echo "--- Preparing chroot build dir ---"
 sudo mkdir -p "$MOUNT_POINT/mnt/build"
 sudo cp "$LIST_MUTTER_MAKEDEPENDS" "$MOUNT_POINT/mnt/build/list-mutter-makedepends.sh"
 sudo chmod +x "$MOUNT_POINT/mnt/build/list-mutter-makedepends.sh"
+if [[ -f "$CHROOT_BUILD_REQUIREMENTS" ]]; then
+	sudo cp "$CHROOT_BUILD_REQUIREMENTS" "$MOUNT_POINT/mnt/build/chroot-build-requirements.txt"
+fi
 sudo cp "$SCRIPT_DIR/install.sh" "$MOUNT_POINT/mnt/build/annotations-install.sh"
 sudo cp "$ANNOTATIONS_GIT_URL_HELPER" "$MOUNT_POINT/mnt/build/annotations-git-url.sh"
 sudo chmod +x "$MOUNT_POINT/mnt/build/annotations-install.sh"
@@ -216,7 +220,11 @@ echo "--- Installing build dependencies in chroot ---"
 sudo arch-chroot "$MOUNT_POINT" /bin/bash <<'CHROOT_PKGS'
 set -euo pipefail
 extra=$(pacman -Si mutter | bash /mnt/build/list-mutter-makedepends.sh | xargs)
-pacman -S --needed --noconfirm base-devel meson ninja git ${extra:-}
+req=""
+if [[ -f /mnt/build/chroot-build-requirements.txt ]]; then
+	req=$(grep -v '^[[:space:]]*#' /mnt/build/chroot-build-requirements.txt | grep -v '^[[:space:]]*$' | xargs)
+fi
+pacman -S --needed --noconfirm base-devel meson ninja git ${extra:-} ${req:-}
 CHROOT_PKGS
 
 # ==========================================

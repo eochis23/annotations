@@ -1,12 +1,15 @@
 #!/bin/bash
 set -euo pipefail
-# Mount the second partition (same settings as compile_target*.sh) and run install.sh
-# inside arch-chroot so CHROOT_REPO_DIR becomes a full git checkout—no SSH keys needed
-# when INSTALL_GIT_REMOTE / origin resolves to HTTPS.
+# Mount the second partition (same settings as compile_target*.sh), run install.sh in
+# arch-chroot to sync the repo at CHROOT_REPO_DIR, then install build deps and compile
+# Mutter (and optionally GNOME Shell) with meson/ninja—same outcome as compile_target_chroot_git.sh
+# without host git commit/push.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOCAL_CONFIG="$SCRIPT_DIR/compile_target.local.sh"
 GIT_URL_HELPER="$SCRIPT_DIR/scripts/annotations-git-url.sh"
+LIST_MUTTER_MAKEDEPENDS="$SCRIPT_DIR/scripts/list-mutter-makedepends.sh"
+CHROOT_BUILD_REQUIREMENTS="${CHROOT_BUILD_REQUIREMENTS:-$SCRIPT_DIR/scripts/chroot-build-requirements.txt}"
 
 if [ ! -f "$LOCAL_CONFIG" ]; then
 	echo "Error: Missing $LOCAL_CONFIG. Copy compile_target.local.example to compile_target.local.sh."
@@ -19,6 +22,13 @@ fi
 
 : "${MOUNT_POINT:?Set MOUNT_POINT in compile_target.local.sh}"
 : "${CHROOT_REPO_DIR:?Set CHROOT_REPO_DIR in compile_target.local.sh}"
+
+BUILD_TARGETS="${BUILD_TARGETS:-mutter}"
+BUILD_TARGETS="${BUILD_TARGETS,,}"
+if [[ "$BUILD_TARGETS" != *mutter* ]]; then
+	echo "Error: BUILD_TARGETS must include mutter (got: $BUILD_TARGETS)"
+	exit 1
+fi
 
 GIT_REMOTE_NAME="${GIT_REMOTE_NAME:-origin}"
 
@@ -88,6 +98,11 @@ echo "--- Ensuring git in chroot ---"
 sudo arch-chroot "$MOUNT_POINT" /bin/bash -lc 'command -v git >/dev/null 2>&1 || pacman -S --needed --noconfirm git'
 
 sudo mkdir -p "$MOUNT_POINT/mnt/build"
+sudo cp "$LIST_MUTTER_MAKEDEPENDS" "$MOUNT_POINT/mnt/build/list-mutter-makedepends.sh"
+sudo chmod +x "$MOUNT_POINT/mnt/build/list-mutter-makedepends.sh"
+if [[ -f "$CHROOT_BUILD_REQUIREMENTS" ]]; then
+	sudo cp "$CHROOT_BUILD_REQUIREMENTS" "$MOUNT_POINT/mnt/build/chroot-build-requirements.txt"
+fi
 sudo cp "$SCRIPT_DIR/install.sh" "$MOUNT_POINT/mnt/build/annotations-install.sh"
 sudo cp "$GIT_URL_HELPER" "$MOUNT_POINT/mnt/build/annotations-git-url.sh"
 sudo chmod +x "$MOUNT_POINT/mnt/build/annotations-install.sh"
@@ -98,4 +113,81 @@ sudo arch-chroot "$MOUNT_POINT" /usr/bin/env GIT_TERMINAL_PROMPT=0 /bin/bash /mn
 	--remote "$REMOTE" \
 	--branch "$BRANCH"
 
-echo "Done. Git checkout on target: $CHROOT_REPO_DIR (branch $BRANCH)."
+if [[ ! -f "$MOUNT_POINT/${CHROOT_REPO_DIR#/}/mutter/meson.build" ]]; then
+	echo "Error: mutter/meson.build missing under $CHROOT_REPO_DIR after install.sh."
+	exit 1
+fi
+if [[ "$BUILD_TARGETS" == *shell* ]] && [[ ! -f "$MOUNT_POINT/${CHROOT_REPO_DIR#/}/gnome-shell/meson.build" ]]; then
+	echo "Error: gnome-shell/meson.build missing under $CHROOT_REPO_DIR after install.sh."
+	exit 1
+fi
+
+if [[ "${CHROOT_PACMAN_SYNC:-0}" == "1" ]]; then
+	echo "--- pacman -Sy (CHROOT_PACMAN_SYNC=1) ---"
+	sudo arch-chroot "$MOUNT_POINT" /bin/bash -lc 'pacman -Sy --noconfirm'
+fi
+
+echo "--- Installing build dependencies in chroot ---"
+sudo arch-chroot "$MOUNT_POINT" /bin/bash <<'CHROOT_PKGS'
+set -euo pipefail
+extra=$(pacman -Si mutter | bash /mnt/build/list-mutter-makedepends.sh | xargs)
+req=""
+if [[ -f /mnt/build/chroot-build-requirements.txt ]]; then
+	req=$(grep -v '^[[:space:]]*#' /mnt/build/chroot-build-requirements.txt | grep -v '^[[:space:]]*$' | xargs)
+fi
+pacman -S --needed --noconfirm base-devel meson ninja git ${extra:-} ${req:-}
+CHROOT_PKGS
+
+echo "--- Configuring & building in chroot (targets: $BUILD_TARGETS) ---"
+sudo arch-chroot "$MOUNT_POINT" \
+	env BUILD_TARGETS="$BUILD_TARGETS" CHROOT_REPO_DIR="$CHROOT_REPO_DIR" \
+	/bin/bash <<'CHROOT_BUILD'
+set -euo pipefail
+repo_dir="${CHROOT_REPO_DIR:?}"
+cd "$repo_dir/mutter"
+rm -rf build
+meson setup build --prefix=/usr
+ninja -C build
+ninja -C build install
+if [[ "${BUILD_TARGETS:-mutter}" == *shell* ]]; then
+	cd "$repo_dir/gnome-shell"
+	rm -rf build
+	meson setup build --prefix=/usr
+	ninja -C build
+	ninja -C build install
+fi
+CHROOT_BUILD
+
+echo "--- Updating target caches (chroot) ---"
+sudo arch-chroot "$MOUNT_POINT" /bin/bash -lc 'ldconfig; glib-compile-schemas /usr/share/glib-2.0/schemas/ 2>/dev/null || true'
+
+echo "--- Verifying key libraries in chroot (ldd) ---"
+set +e
+if [[ "$BUILD_TARGETS" == *shell* ]] && [[ -f "$MOUNT_POINT/usr/bin/gnome-shell" ]]; then
+	ldd_out=$(sudo arch-chroot "$MOUNT_POINT" /usr/bin/ldd /usr/bin/gnome-shell 2>&1)
+	ldd_ec=$?
+	if [[ $ldd_ec -ne 0 ]]; then
+		echo "WARNING: ldd /usr/bin/gnome-shell failed (exit $ldd_ec)"
+		echo "$ldd_out" | tail -20
+	else
+		echo "ldd /usr/bin/gnome-shell: OK"
+	fi
+else
+	m_so=$(find "$MOUNT_POINT/usr/lib" -maxdepth 3 -name 'libmutter-*.so.0' 2>/dev/null | head -1)
+	if [[ -n "$m_so" ]]; then
+		rel=${m_so#"$MOUNT_POINT"}
+		ldd_out=$(sudo arch-chroot "$MOUNT_POINT" /usr/bin/ldd "$rel" 2>&1)
+		ldd_ec=$?
+		if [[ $ldd_ec -ne 0 ]]; then
+			echo "WARNING: ldd mutter lib failed (exit $ldd_ec)"
+			echo "$ldd_out" | tail -15
+		else
+			echo "ldd $rel: OK"
+		fi
+	else
+		echo "Note: could not find libmutter-*.so.0 for ldd check."
+	fi
+fi
+set -e
+
+echo "Success! Repo at $CHROOT_REPO_DIR (branch $BRANCH); built and installed under $MOUNT_POINT/usr (targets: $BUILD_TARGETS)."

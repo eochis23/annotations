@@ -16,7 +16,16 @@ fi
 echo "$out" | awk '
 	/^(Make Depends|Make Depends On)/ {
 		sub(/^(Make Depends|Make Depends On)[[:space:]]*:[[:space:]]*/, "")
-		n = split($0, a, /[[:space:]]+/)
+		line = $0
+		while (getline > 0) {
+			if ($0 ~ /^[[:space:]]+/) {
+				sub(/^[[:space:]]+/, "", $0)
+				line = line " " $0
+				continue
+			}
+			break
+		}
+		n = split(line, a, /[[:space:]]+/)
 		for (i = 1; i <= n; i++) if (a[i] != "") print a[i]
 		exit
 	}

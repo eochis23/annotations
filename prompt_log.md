@@ -172,4 +172,12 @@ help me clear out all partitions I'm not using
 
 ## 22
 
-add all prompts from this chat to prompt_log.md
+plan writing a version of compile_target with that does everything with chroot so it's compiled as if it's on the installation on the second partition. When running, it should commit to the git repository from this folder, push, chroot into the other partition, then pull from this branch of this repository and compile and install the versions of mutter and gnome-shell from there
+
+##23
+
+make this project be one that has an install script that will make it run as a git repository when downloaded and installed with an install script, then have a second script that will make that happen on the second partition
+
+##24
+
+can you have a requirements file that will help it install needed requirements like a real package?

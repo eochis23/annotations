@@ -22,6 +22,9 @@ PARTITION_FS_LABEL="your-root-label"
 # Before deps: pacman -Sy in chroot (if sync DB is stale / pacman -Si mutter fails).
 # CHROOT_PACMAN_SYNC=1
 
+# Extra pacman packages for chroot builds: edit scripts/chroot-build-requirements.txt, or set:
+# CHROOT_BUILD_REQUIREMENTS="/path/to/your-requirements.txt"
+
 # Rollback distro packages on the mounted root (from host), e.g.:
 #   sudo arch-chroot /run/media/you/volume pacman -S --noconfirm mutter
 #   sudo arch-chroot /run/media/you/volume pacman -S --noconfirm gnome-shell
@@ -36,7 +39,8 @@ CHROOT_REPO_DIR="/mnt/build/annotations"
 # If HEAD is detached on the host, set an explicit branch name for push + chroot sync:
 # OVERRIDE_BRANCH=main
 
-# install_second_partition.sh: when this project is not a git checkout on the host, set:
+# install_second_partition.sh also builds mutter (and gnome-shell if BUILD_TARGETS includes shell).
+# When this project is not a git checkout on the host, set:
 # INSTALL_GIT_REMOTE="https://github.com/you/annotations.git"
 # INSTALL_BRANCH="mutter_exploration"
 

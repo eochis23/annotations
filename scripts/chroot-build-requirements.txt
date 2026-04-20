@@ -1,0 +1,30 @@
+# Extra pacman packages for building mutter (and optionally gnome-shell) from this
+# repository inside arch-chroot. These are installed with:
+#   pacman -S --needed --noconfirm base-devel meson ninja git <mutter makedepends> <this file>
+# One package name per line; # starts a comment; blank lines ignored.
+#
+# Use this when upstream needs packages not yet reflected in the sync DB makedepends,
+# or when `pacman -Si mutter` output is incomplete. Add or remove names as needed.
+
+# Meson / subprojects (e.g. some wrap fallbacks look for CMake)
+cmake
+
+# Wayland protocols (pkg-config name wayland-protocols)
+wayland-protocols
+
+# Tooling often assumed by Meson projects
+pkgconf
+
+# GObject / GLib codegen and headers beyond base glib2
+glib2-devel
+gobject-introspection
+
+# Common mutter build gaps on minimal roots
+wayland
+egl-wayland
+shaderc
+xorg-xwayland
+
+# When BUILD_TARGETS includes shell, uncomment or add as needed, e.g.:
+# sassc
+# asciidoc

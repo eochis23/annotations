@@ -12,6 +12,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOCAL_CONFIG="$SCRIPT_DIR/compile_target.local.sh"
 LIST_MUTTER_MAKEDEPENDS="$SCRIPT_DIR/scripts/list-mutter-makedepends.sh"
+CHROOT_BUILD_REQUIREMENTS="${CHROOT_BUILD_REQUIREMENTS:-$SCRIPT_DIR/scripts/chroot-build-requirements.txt}"
 
 if [ ! -f "$LOCAL_CONFIG" ]; then
 	echo "Error: Missing $LOCAL_CONFIG. Copy compile_target.local.example to compile_target.local.sh and set paths."
@@ -110,6 +111,9 @@ echo "--- Building inside $MOUNT_POINT (target toolchain via arch-chroot) ---"
 sudo mkdir -p "$MOUNT_POINT/mnt/build/mutter" "$MOUNT_POINT/mnt/build"
 sudo cp "$LIST_MUTTER_MAKEDEPENDS" "$MOUNT_POINT/mnt/build/list-mutter-makedepends.sh"
 sudo chmod +x "$MOUNT_POINT/mnt/build/list-mutter-makedepends.sh"
+if [[ -f "$CHROOT_BUILD_REQUIREMENTS" ]]; then
+	sudo cp "$CHROOT_BUILD_REQUIREMENTS" "$MOUNT_POINT/mnt/build/chroot-build-requirements.txt"
+fi
 
 sudo mount --bind "$MUTTER_SRC" "$MOUNT_POINT/mnt/build/mutter"
 CHROOT_BIND_MUTTER=1
@@ -140,11 +144,15 @@ if [[ "${CHROOT_PACMAN_SYNC:-0}" == "1" ]]; then
 	sudo arch-chroot "$MOUNT_POINT" /bin/bash -lc 'pacman -Sy --noconfirm'
 fi
 
-echo "--- Installing build dependencies in chroot (base + mutter Make Depends from sync DB) ---"
+echo "--- Installing build dependencies in chroot (base + mutter Make Depends + requirements file) ---"
 sudo arch-chroot "$MOUNT_POINT" /bin/bash <<'CHROOT_PKGS'
 set -euo pipefail
 extra=$(pacman -Si mutter | bash /mnt/build/list-mutter-makedepends.sh | xargs)
-pacman -S --needed --noconfirm base-devel meson ninja git ${extra:-}
+req=""
+if [[ -f /mnt/build/chroot-build-requirements.txt ]]; then
+	req=$(grep -v '^[[:space:]]*#' /mnt/build/chroot-build-requirements.txt | grep -v '^[[:space:]]*$' | xargs)
+fi
+pacman -S --needed --noconfirm base-devel meson ninja git ${extra:-} ${req:-}
 CHROOT_PKGS
 
 echo "--- Configuring & building Mutter in chroot ---"
