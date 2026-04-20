@@ -167,11 +167,9 @@ meta_annotation_event_targets_overlay (const ClutterEvent *event)
           overlay = TRUE;
           break;
         }
-      /* Many built-in pens use POINTER + absolute motion (no RELATIVE_MOTION flag). */
-      if (type == CLUTTER_MOTION &&
-          (caps & (CLUTTER_INPUT_CAPABILITY_TRACKPOINT | CLUTTER_INPUT_CAPABILITY_TOUCHPAD)) == 0 &&
-          (clutter_event_get_flags (event) & CLUTTER_EVENT_FLAG_RELATIVE_MOTION) == 0)
-        overlay = TRUE;
+      /* Do not treat "absolute pointer motion" alone as stylus: some seats emit
+       * absolute MOTION for the primary pointer; routing those here returns
+       * CLUTTER_EVENT_STOP from the annotation layer and breaks GDM login. */
       break;
 
     case CLUTTER_TOUCHPAD_DEVICE:
