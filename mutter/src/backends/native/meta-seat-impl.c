@@ -943,6 +943,9 @@ meta_seat_impl_notify_relative_motion_in_impl (MetaSeatImpl       *seat_impl,
                                                            annotation_libinput_group,
                                                            new_coords.x, new_coords.y);
 
+    meta_annotation_input_debug_emit_pointer_position_if_leak (input_device, freeze_cursor,
+                                                               new_coords.x, new_coords.y);
+
     update_device_coords_in_impl (seat_impl, input_device, new_coords, freeze_cursor);
 
     if (!freeze_cursor)
@@ -1013,6 +1016,9 @@ meta_seat_impl_notify_absolute_motion_in_impl (MetaSeatImpl       *seat_impl,
                                                            axes,
                                                            annotation_libinput_group,
                                                            new_coords.x, new_coords.y);
+
+    meta_annotation_input_debug_emit_pointer_position_if_leak (input_device, freeze_cursor,
+                                                               new_coords.x, new_coords.y);
 
     update_device_coords_in_impl (seat_impl, input_device, new_coords, freeze_cursor);
 

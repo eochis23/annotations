@@ -27,8 +27,10 @@ static gfloat        annotation_last_tablet_y;
 static gint64        annotation_tablet_monotonic_us;
 
 #define ANNOTATION_TABLET_GROUP_COALESCE_USEC (200 * G_TIME_SPAN_MILLISECOND)
-#define ANNOTATION_TABLET_PROXIMITY_TIME_USEC  (400 * G_TIME_SPAN_MILLISECOND)
-#define ANNOTATION_TABLET_PROXIMITY_DIST2      (200.0f * 200.0f)
+/* Any two points on a typical laptop panel fit inside ~2.2k px in one space;
+ * integrated “mouse” nodes often disagree with the tablet node by >200 px. */
+#define ANNOTATION_TABLET_PROXIMITY_TIME_USEC  (1000 * G_TIME_SPAN_MILLISECOND)
+#define ANNOTATION_TABLET_PROXIMITY_DIST2      (2200.0f * 2200.0f)
 #define ANNOTATION_UNKNOWN_LIBINPUT_GROUP       ((gint64) -1)
 
 /* #region agent log */
@@ -86,6 +88,36 @@ annotation_input_agent_log (const char *hypothesis_id,
 }
 
 /* #endregion */
+
+void
+meta_annotation_input_debug_emit_pointer_position_if_leak (ClutterInputDevice *device,
+                                                             gboolean            freeze_cursor,
+                                                             float               pos_x,
+                                                             float               pos_y)
+{
+  static guint leak_counter;
+
+  if (freeze_cursor ||
+      !device ||
+      !g_atomic_int_get (&annotation_non_mouse_isolated))
+    return;
+  if (clutter_input_device_get_device_type (device) != CLUTTER_POINTER_DEVICE)
+    return;
+  if ((clutter_input_device_get_capabilities (device) & CLUTTER_INPUT_CAPABILITY_TOUCHPAD) != 0)
+    return;
+
+  if ((++leak_counter % 18) != 1)
+    return;
+
+  /* #region agent log */
+  meta_annotation_debug_append_ndjson ("H_cursor_leak", "meta-seat-impl.c:emit_ptr",
+                                       "unfrozen_pointer_position",
+                                       (int) (GPOINTER_TO_UINT (device) & 0xffff),
+                                       (int) (pos_x + 0.5f) % 4000,
+                                       (int) (pos_y + 0.5f) % 4000,
+                                       0);
+  /* #endregion */
+}
 
 void
 meta_annotation_input_set_non_mouse_pointer_isolated (gboolean isolated)

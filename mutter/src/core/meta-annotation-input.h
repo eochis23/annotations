@@ -35,4 +35,9 @@ gboolean meta_annotation_input_skip_pointer_motion_coalesced (ClutterInputDevice
                                                                float                   pointer_pos_x,
                                                                float                   pointer_pos_y);
 
+void     meta_annotation_input_debug_emit_pointer_position_if_leak (ClutterInputDevice *device,
+                                                                    gboolean            freeze_cursor,
+                                                                    float               pos_x,
+                                                                    float               pos_y);
+
 gboolean meta_annotation_input_event_should_skip_wayland_seat_sync (const ClutterEvent *event);
