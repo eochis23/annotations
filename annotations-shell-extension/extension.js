@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 
-import './stylesheet.css';
+/* Do not import stylesheet.css here — GJS would parse it as JS and fail on
+ * the leading '.'. GNOME Shell loads extension stylesheet.css automatically
+ * (see extensionSystem.js _loadExtensionStylesheet) before enable() runs. */
 
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
