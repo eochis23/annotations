@@ -1,0 +1,7 @@
+{
+  "uuid": "annotation@annotations.local",
+  "name": "Annotations",
+  "description": "Dock for compositor annotation colors and clear-all (Mutter org.gnome.Mutter.Annotation).",
+  "version": 1,
+  "shell-version": ["50"]
+}

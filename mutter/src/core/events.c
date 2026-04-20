@@ -301,6 +301,9 @@ meta_display_handle_event (MetaDisplay        *display,
       time_ms != CLUTTER_CURRENT_TIME)
     meta_window_check_alive_on_event (window, time_ms);
 
+  if (meta_compositor_route_annotation_event (compositor, event))
+    return CLUTTER_EVENT_STOP;
+
   if (meta_wayland_compositor_handle_event (wayland_compositor, event))
     return CLUTTER_EVENT_STOP;
 

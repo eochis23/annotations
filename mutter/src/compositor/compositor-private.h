@@ -104,6 +104,9 @@ gboolean meta_compositor_drag_window (MetaCompositor      *compositor,
                                       uint32_t             timestamp,
                                       graphene_point_t    *pos_hint);
 
+gboolean meta_compositor_route_annotation_event (MetaCompositor    *compositor,
+                                                 const ClutterEvent *event);
+
 META_EXPORT_TEST
 MetaWindowDrag * meta_compositor_get_current_window_drag (MetaCompositor *compositor);
 

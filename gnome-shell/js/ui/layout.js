@@ -224,6 +224,10 @@ export const LayoutManager = GObject.registerClass({
 
         global.stage.add_child(this.uiGroup);
 
+        const annotationLayer = global.compositor.get_annotation_layer?.();
+        if (annotationLayer)
+            global.stage.insert_child_above(annotationLayer, this.uiGroup);
+
         global.stage.remove_child(global.window_group);
         this.uiGroup.add_child(global.window_group);
         global.connect('shutdown', () => {

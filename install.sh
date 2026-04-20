@@ -14,6 +14,9 @@ set -euo pipefail
 #
 # When copied to a chroot (e.g. /mnt/build/annotations-install.sh), place
 # annotations-git-url.sh beside it if you want SSH→HTTPS rewriting for git mode.
+#
+# After a chroot build, install_second_partition.sh runs scripts/install-annotation-extension-chroot.sh
+# to install the annotation dock extension and enable it via dconf.
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [[ -f "$HERE/annotations-git-url.sh" ]]; then

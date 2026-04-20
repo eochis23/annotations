@@ -88,6 +88,9 @@ META_EXPORT
 ClutterActor * meta_compositor_get_top_window_group (MetaCompositor *compositor);
 
 META_EXPORT
+ClutterActor * meta_compositor_get_annotation_layer (MetaCompositor *compositor);
+
+META_EXPORT
 void meta_compositor_disable_unredirect (MetaCompositor *compositor);
 
 META_EXPORT

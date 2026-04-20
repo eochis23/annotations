@@ -53,6 +53,9 @@
 #include "config.h"
 
 #include "compositor/compositor-private.h"
+#include "compositor/meta-annotation-layer.h"
+#include "core/meta-annotation-dbus.h"
+#include "core/meta-annotation-input.h"
 
 #include "clutter/clutter-mutter.h"
 #include "cogl/cogl.h"
@@ -137,6 +140,9 @@ typedef struct _MetaCompositorPrivate
   MetaWindowDrag *current_drag;
 
   MetaLaters *laters;
+
+  MetaAnnotationLayer *annotation_layer;
+  MetaAnnotationDBus *annotation_dbus;
 } MetaCompositorPrivate;
 
 G_DEFINE_ABSTRACT_TYPE_WITH_PRIVATE (MetaCompositor, meta_compositor,
@@ -306,6 +312,9 @@ meta_compositor_manage (MetaCompositor  *compositor,
   priv->plugin_mgr = meta_plugin_manager_new (compositor, plugin_options);
   meta_plugin_manager_start (priv->plugin_mgr);
 
+  priv->annotation_layer = meta_annotation_layer_new (priv->backend);
+  priv->annotation_dbus = meta_annotation_dbus_new (priv->annotation_layer);
+
   return TRUE;
 }
 
@@ -317,6 +326,9 @@ meta_compositor_real_unmanage (MetaCompositor *compositor)
 
   g_clear_signal_handler (&priv->top_window_actor_destroy_id,
                           priv->top_window_actor);
+
+  g_clear_pointer (&priv->annotation_dbus, meta_annotation_dbus_free);
+  g_clear_pointer (&priv->annotation_layer, meta_annotation_layer_destroy);
 
   g_clear_pointer (&priv->window_group, clutter_actor_destroy);
   g_clear_pointer (&priv->top_window_group, clutter_actor_destroy);
@@ -1770,4 +1782,42 @@ meta_compositor_query_pointer_a11y (MetaCompositor    *compositor,
   *data_out = g_variant_builder_end (&app_data_builder);
   clutter_sprite_get_coords (sprite, rel_coords_out);
   return TRUE;
+}
+
+/**
+ * meta_compositor_get_annotation_layer:
+ * @compositor: a #MetaCompositor
+ *
+ * Returns the compositor-owned annotation overlay actor, or %NULL if
+ * annotations are unavailable.
+ *
+ * Returns: (transfer none) (nullable): The annotation #ClutterActor
+ */
+ClutterActor *
+meta_compositor_get_annotation_layer (MetaCompositor *compositor)
+{
+  MetaCompositorPrivate *priv =
+    meta_compositor_get_instance_private (compositor);
+
+  if (!priv->annotation_layer)
+    return NULL;
+
+  return meta_annotation_layer_get_actor (priv->annotation_layer);
+}
+
+gboolean
+meta_compositor_route_annotation_event (MetaCompositor    *compositor,
+                                        const ClutterEvent *event)
+{
+  MetaCompositorPrivate *priv =
+    meta_compositor_get_instance_private (compositor);
+
+  if (!priv->annotation_layer ||
+      !meta_annotation_layer_get_active (priv->annotation_layer))
+    return FALSE;
+
+  if (!meta_annotation_event_targets_overlay (event))
+    return FALSE;
+
+  return meta_annotation_layer_handle_event (priv->annotation_layer, event);
 }

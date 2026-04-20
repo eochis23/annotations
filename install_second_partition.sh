@@ -153,6 +153,9 @@ bash "$SCRIPT_DIR/scripts/verify-mutter-install.sh" "$MOUNT_POINT"
 echo "--- Updating target caches (chroot) ---"
 sudo arch-chroot "$MOUNT_POINT" /bin/bash -lc 'ldconfig; glib-compile-schemas /usr/share/glib-2.0/schemas/ 2>/dev/null || true'
 
+echo "--- Installing annotation shell extension (chroot) ---"
+bash "$SCRIPT_DIR/scripts/install-annotation-extension-chroot.sh" "$MOUNT_POINT"
+
 echo "--- Verifying key libraries in chroot (ldd) ---"
 set +e
 if [[ "$BUILD_TARGETS" == *shell* ]] && [[ -f "$MOUNT_POINT/usr/bin/gnome-shell" ]]; then

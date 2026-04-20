@@ -181,3 +181,11 @@ make this project be one that has an install script that will make it run as a g
 ##24
 
 can you have a requirements file that will help it install needed requirements like a real package?
+
+##25
+
+I ran it and everything compiled and I got the success message, however when I opened the second partition, there was an underscore in the top left when I started it and nothing else happened. I verified that the mutter and gnome-shell versions here are the same as the originals there and that it worked before. Discuss reasons this might be happening
+
+##25
+
+Now, let's plan the rest of this project that's an annotation shell extension for gnome where we modify mutter and clutter to make sure that any pointer input except for mouse input is directed at the annotation layer above all the content, and the mouse interacts with windows underneath like normal. The layer should have a dock with colors and a trash can button representing clearing all. It should install as part of the install script and be activated by that as well

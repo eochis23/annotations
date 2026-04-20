@@ -1,0 +1,19 @@
+.annotation-dock {
+  background-color: rgba(30, 30, 35, 0.85);
+  border-radius: 16px;
+  padding: 8px;
+  spacing: 8px;
+}
+
+.annotation-color-button {
+  min-width: 36px;
+  min-height: 36px;
+  border-radius: 18px;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+}
+
+.annotation-trash-button {
+  min-width: 36px;
+  min-height: 36px;
+  border-radius: 8px;
+}
