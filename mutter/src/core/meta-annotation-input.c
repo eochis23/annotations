@@ -174,7 +174,6 @@ meta_annotation_input_touchpad_is_pen_digitizer_shim (ClutterInputDevice     *de
                                                       ClutterInputDeviceTool *tool)
 {
   ClutterInputCapabilities caps;
-  unsigned int dw, dh;
   const char *name;
   g_autofree gchar *l = NULL;
 
@@ -186,8 +185,9 @@ meta_annotation_input_touchpad_is_pen_digitizer_shim (ClutterInputDevice     *de
     return TRUE;
   if (tool_is_drawing_stylus (tool))
     return TRUE;
-  if (clutter_input_device_get_dimensions (device, &dw, &dh) && dw > 0 && dh > 0)
-    return TRUE;
+
+  /* Do not treat non-zero dimensions as proof of a digitizer: libinput reports
+   * physical size for many laptop touchpads (mm), which would mis-freeze them. */
 
   /* libinput sometimes labels the integrated pen path as “touchpad”; avoid generic
    * “elan” here so laptop trackpads are not mistaken for the pen. */
@@ -285,10 +285,18 @@ pointer_device_matches_annotation_pointer (ClutterInputDevice     *device,
     return TRUE;
   if (tool_is_drawing_stylus (tool))
     return TRUE;
-  if (clutter_input_device_get_dimensions (device, &dw, &dh) && dw > 0 && dh > 0)
-    return TRUE;
-  if (device_name_hints_stylus (device))
-    return TRUE;
+
+  /* Clickpads are often POINTER_DEVICE + TOUCHPAD capability with vendor names
+   * like "ELAN…" that also appear on digitizers — do not use name/size-only
+   * heuristics there (runtime: touchpad dead while annotation isolated). */
+  if (!((caps & CLUTTER_INPUT_CAPABILITY_TOUCHPAD) != 0 &&
+        (caps & CLUTTER_INPUT_CAPABILITY_TABLET_TOOL) == 0))
+    {
+      if (clutter_input_device_get_dimensions (device, &dw, &dh) && dw > 0 && dh > 0)
+        return TRUE;
+      if (device_name_hints_stylus (device))
+        return TRUE;
+    }
 
   /* Integrated pens often report as POINTER with pressure on motion only.
    * Seat impl passes motion_axes (no ClutterEvent yet). */
