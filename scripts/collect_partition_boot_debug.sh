@@ -1,6 +1,6 @@
 #!/bin/bash
-# Collect runtime evidence for blank-screen / gnome-shell issues on the DESTDIR
-# target root. Writes a human-readable report and NDJSON lines for debug analysis.
+# Collect runtime evidence for blank-screen / gnome-shell issues on the target root.
+# Writes a human-readable report under .cursor/partition-boot-debug-report.txt
 #
 # Run (mount target first if needed):
 #   bash /home/eochis/Projects/annotations/scripts/collect_partition_boot_debug.sh
@@ -9,43 +9,8 @@
 
 set -euo pipefail
 
-# #region agent log
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-DEBUG_LOG="${REPO_ROOT}/.cursor/debug-78a20e.log"
 REPORT_FILE="${REPO_ROOT}/.cursor/partition-boot-debug-report.txt"
-SESSION_ID="78a20e"
-
-log_ndjson() {
-	local hypothesis_id=$1
-	local message=$2
-	local data_json
-	if [[ $# -ge 3 ]]; then
-		data_json="$3"
-	else
-		data_json="{}"
-	fi
-	python3 -c "
-import json, sys, time
-hid, msg, dj = sys.argv[1:4]
-try:
-    data = json.loads(dj)
-except json.JSONDecodeError:
-    data = {'parse_error': True, 'raw': dj[:500]}
-rec = {
-    'sessionId': '${SESSION_ID}',
-    'timestamp': int(time.time() * 1000),
-    'hypothesisId': hid,
-    'location': 'collect_partition_boot_debug.sh',
-    'message': msg,
-    'data': data,
-}
-path = '''${DEBUG_LOG}'''
-with open(path, 'a', encoding='utf-8') as f:
-    f.write(json.dumps(rec, ensure_ascii=False) + '\n')
-" "$hypothesis_id" "$message" "$data_json" 2>/dev/null || true
-}
-# #endregion
-
 LOCAL_CONFIG="${REPO_ROOT}/compile_target.local.sh"
 MOUNT_POINT=""
 PARTITION_FS_LABEL=""
@@ -73,11 +38,8 @@ if [[ -n "${MOUNT_POINT:-}" ]] && ! mountpoint -q "$MOUNT_POINT" 2>/dev/null; th
 	if [[ -n "$PARTITION_DEVICE" && -b "$PARTITION_DEVICE" && $EUID -eq 0 ]]; then
 		echo "--- Auto-mounting $PARTITION_DEVICE on $MOUNT_POINT (collector) ---"
 		mkdir -p "$MOUNT_POINT"
-		if mount "$PARTITION_DEVICE" "$MOUNT_POINT" 2>/dev/null; then
-			log_ndjson "H1" "collector auto-mounted LABEL partition" "$(PARTITION_DEVICE="$PARTITION_DEVICE" MOUNT_POINT="$MOUNT_POINT" python3 -c 'import json,os;print(json.dumps({"device":os.environ["PARTITION_DEVICE"],"mount":os.environ["MOUNT_POINT"]}))')"
-		else
+		if ! mount "$PARTITION_DEVICE" "$MOUNT_POINT" 2>/dev/null; then
 			echo "Auto-mount failed (try: sudo mount LABEL=$PARTITION_FS_LABEL \"$MOUNT_POINT\")"
-			log_ndjson "H1" "collector auto-mount mount(8) failed" "{}"
 		fi
 	elif [[ $EUID -ne 0 ]]; then
 		echo "Note: target not mounted; run with sudo and set PARTITION_DEVICE or PARTITION_PARTUUID in compile_target.local.sh if LABEL is ambiguous."
@@ -100,10 +62,8 @@ fi
 	if [[ -n "${MOUNT_POINT:-}" ]] && mountpoint -q "$MOUNT_POINT" 2>/dev/null; then
 		echo "mountpoint -q: YES"
 		findmnt -o TARGET,SOURCE,FSTYPE,OPTIONS -T "$MOUNT_POINT" 2>/dev/null || true
-		log_ndjson "H1" "MOUNT_POINT is mounted" "{}"
 	else
 		echo "mountpoint -q: NO (mount target before meaningful chroot/ldd checks)"
-		log_ndjson "H1" "MOUNT_POINT not mounted or unset" "{}"
 		echo
 		echo ">>> ACTION REQUIRED: Mount $MOUNT_POINT (e.g. open the volume in Files,"
 		echo ">>> or: sudo mount LABEL=$PARTITION_FS_LABEL \"$MOUNT_POINT\") then re-run this script."
@@ -118,10 +78,8 @@ fi
 		ls -la "$GS" 2>/dev/null || true
 		file "$GS" 2>/dev/null || true
 		readelf -l "$GS" 2>/dev/null | grep -E 'interpreter|Requesting' || true
-		log_ndjson "H2" "gnome-shell binary exists" "{\"path\":\"usr/bin/gnome-shell\"}"
 	else
 		echo "no $GS"
-		log_ndjson "H2" "gnome-shell binary missing" "{}"
 	fi
 	if [[ -n "${MOUNT_POINT:-}" ]]; then
 		shopt -s nullglob
@@ -154,14 +112,10 @@ fi
 			echo "$out" | head -60
 			if [[ $ldd_ec -ne 0 ]]; then
 				echo "(chroot ldd exit $ldd_ec)"
-				log_ndjson "H3" "chroot ldd non-zero exit unresolved deps" "{\"exit\":$ldd_ec}"
-			else
-				log_ndjson "H3" "chroot ldd exit 0" "{}"
 			fi
 		fi
 	else
 		echo "skipped (need mounted tree and /usr/bin/gnome-shell or libmutter-*.so.0; sudo $0)"
-		log_ndjson "H3" "ldd skipped missing mount or target" "$(python3 -c "import json,os;print(json.dumps({'euid':os.geteuid()}))")"
 	fi
 	echo
 
@@ -184,9 +138,6 @@ fi
 			journalctl -D "$JDIR" -b -1 -u gdm.service --no-pager 2>/dev/null | tail -100 || true
 			echo "--- previous boot (-b -1): gnome-shell|mutter|... ---"
 			journalctl -D "$JDIR" -b -1 --no-pager 2>/dev/null | grep -iE 'gnome-shell|mutter|gjs|segfault|fatal|error' | tail -80 || true
-			log_ndjson "H4" "journalctl -D excerpts (boot 0 and -1)" "{\"journal_dir\":\"var/log/journal\"}"
-		else
-			log_ndjson "H4" "no journalctl" "{}"
 		fi
 		echo
 		echo ">>> Manual: idx 0 = newest boot on this disk; -1 = one before. Use -b 0 for the last bad session."
@@ -195,7 +146,6 @@ fi
 		echo ">>>   sudo journalctl -D \"$JDIR\" -b 0 --no-pager | grep -iE 'gnome-shell|mutter|gjs|segfault|fatal|error' | tail -80"
 	else
 		echo "no $JDIR (enable persistent journal on that install: /etc/systemd/journald.conf Storage=persistent)"
-		log_ndjson "H4" "target journal dir missing" "{}"
 	fi
 	echo
 
@@ -205,10 +155,8 @@ fi
 		if [[ -n "$zb" ]]; then
 			echo "FOUND empty mutter libraries:"
 			echo "$zb"
-			log_ndjson "H5a" "zero-byte mutter so found" "{}"
 		else
 			echo "No zero-byte libmutter*.so under mutter-* (good)."
-			log_ndjson "H5a" "no zero-byte mutter libs" "{}"
 		fi
 	else
 		echo "skipped (no MOUNT_POINT)"
@@ -222,12 +170,8 @@ fi
 	if [[ -n "${MOUNT_POINT:-}" && -f "${MOUNT_POINT}/usr/lib/libglib-2.0.so.0" ]]; then
 		ls -la "${MOUNT_POINT}/usr/lib"/libglib-2.0.so* 2>/dev/null | head -5 || true
 	fi
-	log_ndjson "H5" "glib package versions listed" "{}"
 	echo
 
 	echo "---------- done ----------"
 	echo "Report: $REPORT_FILE"
-	echo "NDJSON: $DEBUG_LOG"
 } 2>&1 | tee "$REPORT_FILE"
-
-log_ndjson "H0" "collect_partition_boot_debug finished" "{\"report\":\"partition-boot-debug-report.txt\"}"
