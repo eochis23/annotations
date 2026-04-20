@@ -31,6 +31,7 @@
 #include "compositor/compositor-private.h"
 #include "compositor/meta-window-actor-private.h"
 #include "core/display-private.h"
+#include "core/meta-annotation-input.h"
 #include "core/window-private.h"
 #include "meta/meta-backend.h"
 #include "wayland/meta-wayland-private.h"
@@ -170,7 +171,8 @@ meta_display_handle_event (MetaDisplay        *display,
       meta_wayland_text_input_update (wayland_text_input, event))
     return CLUTTER_EVENT_STOP;
 
-  meta_wayland_compositor_update (wayland_compositor, event);
+  if (!meta_annotation_input_event_should_skip_wayland_seat_sync (event))
+    meta_wayland_compositor_update (wayland_compositor, event);
 
   if (event_type == CLUTTER_PAD_BUTTON_PRESS ||
       event_type == CLUTTER_PAD_BUTTON_RELEASE ||

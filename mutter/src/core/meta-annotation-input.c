@@ -106,10 +106,13 @@ device_name_hints_stylus (ClutterInputDevice *device)
  * behaving as the core mouse (same rules for routing and pointer isolation). */
 static gboolean
 pointer_device_matches_annotation_pointer (ClutterInputDevice     *device,
-                                           ClutterInputDeviceTool *tool)
+                                           ClutterInputDeviceTool *tool,
+                                           const ClutterEvent     *event)
 {
   ClutterInputCapabilities caps;
   unsigned int dw, dh;
+  gdouble *axes;
+  guint n_axes;
 
   caps = clutter_input_device_get_capabilities (device);
   if (caps & CLUTTER_INPUT_CAPABILITY_TABLET_TOOL)
@@ -120,6 +123,18 @@ pointer_device_matches_annotation_pointer (ClutterInputDevice     *device,
     return TRUE;
   if (device_name_hints_stylus (device))
     return TRUE;
+
+  /* Integrated pens often report as POINTER with pressure on motion only. */
+  if (event &&
+      clutter_event_type (event) == CLUTTER_MOTION &&
+      (caps & CLUTTER_INPUT_CAPABILITY_TOUCHPAD) == 0)
+    {
+      axes = clutter_event_get_axes (event, &n_axes);
+      if (axes != NULL &&
+          (int) CLUTTER_INPUT_AXIS_PRESSURE < (int) n_axes &&
+          axes[CLUTTER_INPUT_AXIS_PRESSURE] > 0.0)
+        return TRUE;
+    }
 
   return FALSE;
 }
@@ -135,7 +150,26 @@ meta_annotation_input_skip_master_pointer_update (ClutterInputDevice     *device
   if (clutter_input_device_get_device_type (device) != CLUTTER_POINTER_DEVICE)
     return FALSE;
 
-  return pointer_device_matches_annotation_pointer (device, tool);
+  return pointer_device_matches_annotation_pointer (device, tool, NULL);
+}
+
+gboolean
+meta_annotation_input_skip_pointer_motion_coalesced (ClutterInputDevice     *device,
+                                                     ClutterInputDeviceTool *tool,
+                                                     const double            *motion_axes)
+{
+  if (meta_annotation_input_skip_master_pointer_update (device, tool))
+    return TRUE;
+  if (!g_atomic_int_get (&annotation_non_mouse_isolated))
+    return FALSE;
+  if (!device || clutter_input_device_get_device_type (device) != CLUTTER_POINTER_DEVICE)
+    return FALSE;
+  if (clutter_input_device_get_capabilities (device) & CLUTTER_INPUT_CAPABILITY_TOUCHPAD)
+    return FALSE;
+  if (!motion_axes)
+    return FALSE;
+
+  return motion_axes[CLUTTER_INPUT_AXIS_PRESSURE] > 0.0;
 }
 
 gboolean
@@ -145,10 +179,6 @@ meta_annotation_event_targets_overlay (const ClutterEvent *event)
   ClutterInputDeviceType dtype;
   ClutterEventType type;
   gboolean overlay;
-
-  device = clutter_event_get_source_device (event);
-  if (!device)
-    return FALSE;
 
   type = clutter_event_type (event);
   switch (type)
@@ -165,6 +195,18 @@ meta_annotation_event_targets_overlay (const ClutterEvent *event)
     default:
       return FALSE;
     }
+
+  /* Touch events may use the stage virtual pointer as source_device (see
+   * clutter_event_touch_new); classify by event type, not device type. */
+  if (type == CLUTTER_TOUCH_BEGIN ||
+      type == CLUTTER_TOUCH_UPDATE ||
+      type == CLUTTER_TOUCH_END ||
+      type == CLUTTER_TOUCH_CANCEL)
+    return TRUE;
+
+  device = clutter_event_get_source_device (event);
+  if (!device)
+    return FALSE;
 
   dtype = clutter_input_device_get_device_type (device);
   overlay = FALSE;
@@ -184,7 +226,7 @@ meta_annotation_event_targets_overlay (const ClutterEvent *event)
         overlay = FALSE;
       else
         overlay = pointer_device_matches_annotation_pointer (
-          device, clutter_event_get_device_tool (event));
+          device, clutter_event_get_device_tool (event), event);
       break;
 
     case CLUTTER_TOUCHPAD_DEVICE:
@@ -212,4 +254,13 @@ meta_annotation_event_targets_overlay (const ClutterEvent *event)
   /* #endregion */
 
   return overlay;
+}
+
+gboolean
+meta_annotation_input_event_should_skip_wayland_seat_sync (const ClutterEvent *event)
+{
+  if (!g_atomic_int_get (&annotation_non_mouse_isolated))
+    return FALSE;
+
+  return meta_annotation_event_targets_overlay (event);
 }

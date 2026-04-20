@@ -858,24 +858,17 @@ constrain_coordinates (MetaSeatImpl       *seat_impl,
 static void
 update_device_coords_in_impl (MetaSeatImpl       *seat_impl,
                               ClutterInputDevice *input_device,
-                              graphene_point_t    coords)
+                              graphene_point_t    coords,
+                              gboolean            freeze_pointer_state)
 {
   MetaSeatImplPrivate *priv = meta_seat_impl_get_instance_private (seat_impl);
-  MetaInputDeviceNative *device_native;
-  ClutterInputDeviceTool *tool;
 
   g_rw_lock_writer_lock (&seat_impl->state_lock);
 
   if (clutter_input_device_get_device_type (input_device) == CLUTTER_TABLET_DEVICE)
     meta_seat_impl_update_stylus_state (seat_impl, input_device, coords);
-  else
-    {
-      device_native = META_INPUT_DEVICE_NATIVE (input_device);
-      tool = device_native->last_tool;
-
-      if (!meta_annotation_input_skip_master_pointer_update (input_device, tool))
-        priv->pointer_state = coords;
-    }
+  else if (!freeze_pointer_state)
+    priv->pointer_state = coords;
 
   g_rw_lock_writer_unlock (&seat_impl->state_lock);
 }
@@ -924,10 +917,18 @@ meta_seat_impl_notify_relative_motion_in_impl (MetaSeatImpl       *seat_impl,
   dx_constrained = new_coords.x - coords.x;
   dy_constrained = new_coords.y - coords.y;
 
-  update_device_coords_in_impl (seat_impl, input_device, new_coords);
+  {
+    gboolean freeze_cursor =
+      meta_annotation_input_skip_pointer_motion_coalesced (input_device,
+                                                           device_native->last_tool,
+                                                           axes);
 
-  g_signal_emit (seat_impl, signals[POINTER_POSITION_CHANGED_IN_IMPL], 0,
-                 &new_coords);
+    update_device_coords_in_impl (seat_impl, input_device, new_coords, freeze_cursor);
+
+    if (!freeze_cursor)
+      g_signal_emit (seat_impl, signals[POINTER_POSITION_CHANGED_IN_IMPL], 0,
+                     &new_coords);
+  }
 
   event =
     clutter_event_motion_new (CLUTTER_EVENT_FLAG_RELATIVE_MOTION,
@@ -954,7 +955,6 @@ meta_seat_impl_notify_absolute_motion_in_impl (MetaSeatImpl       *seat_impl,
                                                float               y,
                                                double             *axes)
 {
-  MetaSeatImplPrivate *priv = meta_seat_impl_get_instance_private (seat_impl);
   MetaInputDeviceNative *device_native =
     META_INPUT_DEVICE_NATIVE (input_device);
   ClutterModifierType modifiers;
@@ -967,7 +967,19 @@ meta_seat_impl_notify_absolute_motion_in_impl (MetaSeatImpl       *seat_impl,
 
   new_coords = GRAPHENE_POINT_INIT (x, y);
   constrain_coordinates (seat_impl, input_device, time_us, coords, &new_coords);
-  update_device_coords_in_impl (seat_impl, input_device, new_coords);
+
+  {
+    gboolean freeze_cursor =
+      meta_annotation_input_skip_pointer_motion_coalesced (input_device,
+                                                           device_native->last_tool,
+                                                           axes);
+
+    update_device_coords_in_impl (seat_impl, input_device, new_coords, freeze_cursor);
+
+    if (!freeze_cursor)
+      g_signal_emit (seat_impl, signals[POINTER_POSITION_CHANGED_IN_IMPL], 0,
+                     &new_coords);
+  }
 
   if (clutter_input_device_get_device_type (input_device) == CLUTTER_TABLET_DEVICE)
     modifiers = device_native->button_state;
@@ -975,9 +987,6 @@ meta_seat_impl_notify_absolute_motion_in_impl (MetaSeatImpl       *seat_impl,
     modifiers = seat_impl->button_state;
 
   modifiers |= xkb_state_serialize_mods (seat_impl->xkb, XKB_STATE_MODS_EFFECTIVE);
-
-  g_signal_emit (seat_impl, signals[POINTER_POSITION_CHANGED_IN_IMPL], 0,
-                 &priv->pointer_state);
 
   event =
     clutter_event_motion_new (CLUTTER_EVENT_NONE,
