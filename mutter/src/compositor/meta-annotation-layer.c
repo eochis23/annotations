@@ -206,7 +206,8 @@ meta_annotation_layer_new (MetaBackend *backend)
 
   layer = g_new0 (MetaAnnotationLayer, 1);
   layer->backend = g_object_ref (backend);
-  layer->active = TRUE;
+  /* Inactive until the shell extension calls SetActive(true) over D-Bus. */
+  layer->active = FALSE;
   layer->rgba[0] = 1.0f;
   layer->rgba[1] = 0.2f;
   layer->rgba[2] = 0.2f;
@@ -227,10 +228,10 @@ meta_annotation_layer_new (MetaBackend *backend)
                              layer, G_CONNECT_DEFAULT);
 
   on_stage_size_changed (stage, NULL, layer);
-  clutter_actor_show (layer->actor);
+  clutter_actor_hide (layer->actor);
   /* Parented by gnome-shell above uiGroup so drawing stays over shell chrome. */
 
-  meta_annotation_input_set_non_mouse_pointer_isolated (layer->active);
+  meta_annotation_input_set_non_mouse_pointer_isolated (FALSE);
 
   return layer;
 }

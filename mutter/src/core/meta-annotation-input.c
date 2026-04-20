@@ -107,7 +107,8 @@ device_name_hints_stylus (ClutterInputDevice *device)
 static gboolean
 pointer_device_matches_annotation_pointer (ClutterInputDevice     *device,
                                            ClutterInputDeviceTool *tool,
-                                           const ClutterEvent     *event)
+                                           const ClutterEvent     *event,
+                                           const double            *motion_axes)
 {
   ClutterInputCapabilities caps;
   unsigned int dw, dh;
@@ -124,15 +125,21 @@ pointer_device_matches_annotation_pointer (ClutterInputDevice     *device,
   if (device_name_hints_stylus (device))
     return TRUE;
 
-  /* Integrated pens often report as POINTER with pressure on motion only. */
-  if (event &&
-      clutter_event_type (event) == CLUTTER_MOTION &&
-      (caps & CLUTTER_INPUT_CAPABILITY_TOUCHPAD) == 0)
+  /* Integrated pens often report as POINTER with pressure on motion only.
+   * Seat impl passes motion_axes (no ClutterEvent yet). */
+  if ((caps & CLUTTER_INPUT_CAPABILITY_TOUCHPAD) == 0)
     {
-      axes = clutter_event_get_axes (event, &n_axes);
-      if (axes != NULL &&
-          (int) CLUTTER_INPUT_AXIS_PRESSURE < (int) n_axes &&
-          axes[CLUTTER_INPUT_AXIS_PRESSURE] > 0.0)
+      if (event &&
+          clutter_event_type (event) == CLUTTER_MOTION)
+        {
+          axes = clutter_event_get_axes (event, &n_axes);
+          if (axes != NULL &&
+              (int) CLUTTER_INPUT_AXIS_PRESSURE < (int) n_axes &&
+              axes[CLUTTER_INPUT_AXIS_PRESSURE] > 0.0)
+            return TRUE;
+        }
+      else if (motion_axes &&
+               motion_axes[CLUTTER_INPUT_AXIS_PRESSURE] > 0.0)
         return TRUE;
     }
 
@@ -141,7 +148,8 @@ pointer_device_matches_annotation_pointer (ClutterInputDevice     *device,
 
 gboolean
 meta_annotation_input_skip_master_pointer_update (ClutterInputDevice     *device,
-                                                  ClutterInputDeviceTool *tool)
+                                                  ClutterInputDeviceTool *tool,
+                                                  const double            *motion_axes)
 {
   if (!g_atomic_int_get (&annotation_non_mouse_isolated))
     return FALSE;
@@ -150,7 +158,7 @@ meta_annotation_input_skip_master_pointer_update (ClutterInputDevice     *device
   if (clutter_input_device_get_device_type (device) != CLUTTER_POINTER_DEVICE)
     return FALSE;
 
-  return pointer_device_matches_annotation_pointer (device, tool, NULL);
+  return pointer_device_matches_annotation_pointer (device, tool, NULL, motion_axes);
 }
 
 gboolean
@@ -158,7 +166,7 @@ meta_annotation_input_skip_pointer_motion_coalesced (ClutterInputDevice     *dev
                                                      ClutterInputDeviceTool *tool,
                                                      const double            *motion_axes)
 {
-  if (meta_annotation_input_skip_master_pointer_update (device, tool))
+  if (meta_annotation_input_skip_master_pointer_update (device, tool, motion_axes))
     return TRUE;
   if (!g_atomic_int_get (&annotation_non_mouse_isolated))
     return FALSE;
@@ -253,7 +261,7 @@ meta_annotation_event_targets_overlay (const ClutterEvent *event)
         overlay = FALSE;
       else
         overlay = pointer_device_matches_annotation_pointer (
-          device, clutter_event_get_device_tool (event), event);
+          device, clutter_event_get_device_tool (event), event, NULL);
       break;
 
     case CLUTTER_TOUCHPAD_DEVICE:
