@@ -36,3 +36,20 @@ EOF
 sudo arch-chroot "$MP" /bin/bash -lc 'command -v dconf >/dev/null 2>&1 && dconf update || true'
 
 echo "Installed $UUID under $DEST and refreshed dconf in chroot (if dconf is available)."
+
+# GNOME Shell loads ~/.local/share/gnome-shell/extensions/<uuid> BEFORE /usr/share/.../extensions/<uuid>.
+# A stale user copy causes: "already installed in … (user). … /usr/share/… will not be loaded"
+# and you run old extension code (no SetActive retries, broken stylesheet import, etc.).
+if [[ -d "$MP" ]] && compgen -G "$MP/home/*/.local/share/gnome-shell/extensions/${UUID}" >/dev/null 2>&1; then
+	echo ""
+	echo "WARNING: Per-user copy of ${UUID} found under ${MP}/home/*/.local/share/gnome-shell/extensions/"
+	echo "         Shell will IGNORE the system copy at ${DEST} until the user copy is removed."
+	echo "         On the installed OS, run (as that user):"
+	echo "           rm -rf ~/.local/share/gnome-shell/extensions/${UUID}"
+	echo "         Then log out and back in (or reboot)."
+	echo ""
+fi
+if [[ "${ANNOTATION_CHROOT_REMOVE_USER_SHADOW_EXT:-0}" == "1" ]] && compgen -G "$MP/home/*/.local/share/gnome-shell/extensions/${UUID}" >/dev/null 2>&1; then
+	echo "ANNOTATION_CHROOT_REMOVE_USER_SHADOW_EXT=1: removing user shadow copies..."
+	find "$MP/home" -path "*/.local/share/gnome-shell/extensions/${UUID}" -type d -prune -exec sudo rm -rf {} +
+fi

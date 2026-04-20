@@ -12,6 +12,7 @@
 #include "meta/meta-backend.h"
 
 #include <cairo.h>
+#include <glib.h>
 #include <math.h>
 
 /* #region agent log */
@@ -266,7 +267,18 @@ void
 meta_annotation_layer_set_active (MetaAnnotationLayer *layer,
                                    gboolean            active)
 {
+  static gboolean logged_prev = (gboolean) 2;
+
   g_return_if_fail (layer != NULL);
+
+  if (logged_prev == (gboolean) 2 || logged_prev != active)
+    {
+      logged_prev = active;
+      g_message ("annotation layer: SetActive %s surface=%p",
+                 active ? "true" : "false",
+                 (void *) layer->surface);
+    }
+
   layer->active = active;
   meta_annotation_input_set_non_mouse_pointer_isolated (active);
   if (layer->actor)
@@ -307,6 +319,8 @@ draw_segment (MetaAnnotationLayer *layer,
               float                  y2)
 {
   cairo_t *cr;
+  float dx = x2 - x1;
+  float dy = y2 - y1;
 
   if (!layer->surface)
     return;
@@ -325,9 +339,19 @@ draw_segment (MetaAnnotationLayer *layer,
   cairo_set_line_width (cr, 4.0);
   cairo_set_line_cap (cr, CAIRO_LINE_CAP_ROUND);
   cairo_set_line_join (cr, CAIRO_LINE_JOIN_ROUND);
-  cairo_move_to (cr, x1, y1);
-  cairo_line_to (cr, x2, y2);
-  cairo_stroke (cr);
+
+  /* Tap / click without movement: line length 0 strokes nothing with stroke(). */
+  if (dx * dx + dy * dy < 0.25f)
+    {
+      cairo_arc (cr, x1, y1, 2.0f, 0.0f, (float) (2.0 * M_PI));
+      cairo_fill (cr);
+    }
+  else
+    {
+      cairo_move_to (cr, x1, y1);
+      cairo_line_to (cr, x2, y2);
+      cairo_stroke (cr);
+    }
   cairo_destroy (cr);
 
   cairo_surface_flush (layer->surface);
@@ -342,6 +366,23 @@ pointer_has_draw_button (const ClutterEvent *event)
   ClutterModifierType state = clutter_event_get_state (event);
 
   return (state & CLUTTER_BUTTON1_MASK) != 0;
+}
+
+/* Pressure on MOTION with a tablet tool (no BUTTON1_MASK on integrated pens). */
+static gboolean
+motion_has_tablet_pressure (const ClutterEvent *event)
+{
+  gdouble *axes;
+  guint n_axes;
+
+  if (!clutter_event_get_device_tool (event))
+    return FALSE;
+
+  axes = clutter_event_get_axes (event, &n_axes);
+  if (!axes || (int) CLUTTER_INPUT_AXIS_PRESSURE >= (int) n_axes)
+    return FALSE;
+
+  return axes[CLUTTER_INPUT_AXIS_PRESSURE] > 0.0;
 }
 
 gboolean
@@ -374,8 +415,13 @@ meta_annotation_layer_handle_event (MetaAnnotationLayer *layer,
   switch (type)
     {
     case CLUTTER_BUTTON_PRESS:
-      if (clutter_event_get_button (event) != CLUTTER_BUTTON_PRIMARY)
-        return TRUE;
+      {
+        guint btn = clutter_event_get_button (event);
+
+        /* Primary, or any press while a tool is present (synthetic pointer nodes). */
+        if (btn != CLUTTER_BUTTON_PRIMARY && !clutter_event_get_device_tool (event))
+          return TRUE;
+      }
       clutter_event_get_coords (event, &pos.x, &pos.y);
       layer->last_x = pos.x;
       layer->last_y = pos.y;
@@ -383,17 +429,32 @@ meta_annotation_layer_handle_event (MetaAnnotationLayer *layer,
       return TRUE;
 
     case CLUTTER_MOTION:
-      if (!layer->stroke_active && !pointer_has_draw_button (event))
+      {
+        gboolean pressure_tip = motion_has_tablet_pressure (event);
+        gboolean btn = pointer_has_draw_button (event);
+
+        if (!layer->stroke_active && !btn && !pressure_tip)
+          return TRUE;
+
+        clutter_event_get_coords (event, &pos.x, &pos.y);
+
+        if (!layer->stroke_active && (btn || pressure_tip))
+          {
+            layer->last_x = pos.x;
+            layer->last_y = pos.y;
+            layer->stroke_active = TRUE;
+          }
+
+        if (layer->stroke_active)
+          {
+            draw_segment (layer, layer->last_x, layer->last_y, pos.x, pos.y);
+            layer->last_x = pos.x;
+            layer->last_y = pos.y;
+          }
+
+        layer->stroke_active = btn || pressure_tip;
         return TRUE;
-      clutter_event_get_coords (event, &pos.x, &pos.y);
-      if (layer->stroke_active || pointer_has_draw_button (event))
-        {
-          draw_segment (layer, layer->last_x, layer->last_y, pos.x, pos.y);
-          layer->last_x = pos.x;
-          layer->last_y = pos.y;
-          layer->stroke_active = pointer_has_draw_button (event);
-        }
-      return TRUE;
+      }
 
     case CLUTTER_BUTTON_RELEASE:
       if (layer->stroke_active)
@@ -422,6 +483,14 @@ meta_annotation_layer_handle_event (MetaAnnotationLayer *layer,
       return TRUE;
 
     case CLUTTER_TOUCH_END:
+      if (layer->stroke_active)
+        {
+          clutter_event_get_coords (event, &pos.x, &pos.y);
+          draw_segment (layer, layer->last_x, layer->last_y, pos.x, pos.y);
+        }
+      layer->stroke_active = FALSE;
+      return TRUE;
+
     case CLUTTER_TOUCH_CANCEL:
       layer->stroke_active = FALSE;
       return TRUE;
