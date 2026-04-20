@@ -25,6 +25,14 @@ PARTITION_FS_LABEL="your-root-label"
 # Extra pacman packages for chroot builds: edit scripts/chroot-build-requirements.txt, or set:
 # CHROOT_BUILD_REQUIREMENTS="/path/to/your-requirements.txt"
 
+# Meson in chroot (defaults skip tests / dbusmock). To run mutter tests, install python-dbusmock and e.g.:
+# CHROOT_MUTTER_MESON_SETUP_EXTRA="-Dtests=enabled"
+# CHROOT_SHELL_MESON_SETUP_EXTRA="-Dtests=true"
+
+# Manual: inside arch-chroot as root, install.sh can install all chroot build packages:
+#   bash /mnt/build/annotations-install.sh --install-chroot-build-deps --yes
+# Edit scripts/chroot-build-requirements.txt to add missing pacman names when Meson reports a dependency.
+
 # Rollback distro packages on the mounted root (from host), e.g.:
 #   sudo arch-chroot /run/media/you/volume pacman -S --noconfirm mutter
 #   sudo arch-chroot /run/media/you/volume pacman -S --noconfirm gnome-shell

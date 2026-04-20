@@ -13,6 +13,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOCAL_CONFIG="$SCRIPT_DIR/compile_target.local.sh"
 LIST_MUTTER_MAKEDEPENDS="$SCRIPT_DIR/scripts/list-mutter-makedepends.sh"
 CHROOT_BUILD_REQUIREMENTS="${CHROOT_BUILD_REQUIREMENTS:-$SCRIPT_DIR/scripts/chroot-build-requirements.txt}"
+ANNOTATIONS_GIT_URL_HELPER="$SCRIPT_DIR/scripts/annotations-git-url.sh"
 
 if [ ! -f "$LOCAL_CONFIG" ]; then
 	echo "Error: Missing $LOCAL_CONFIG. Copy compile_target.local.example to compile_target.local.sh and set paths."
@@ -34,6 +35,10 @@ fi
 if [[ "$BUILD_TARGETS" == *shell* ]]; then
 	: "${SHELL_SRC:?Set SHELL_SRC in compile_target.local.sh when BUILD_TARGETS includes shell}"
 fi
+
+# Chroot meson: disable test suites by default (avoids python-dbusmock, extra gtk3, etc.).
+: "${CHROOT_MUTTER_MESON_SETUP_EXTRA:=-Dtests=disabled}"
+: "${CHROOT_SHELL_MESON_SETUP_EXTRA:=-Dtests=false}"
 
 # Block device: prefer PARTITION_DEVICE or PARTITION_PARTUUID when two copies share LABEL.
 if [[ -z "${PARTITION_DEVICE:-}" && -z "${PARTITION_PARTUUID:-}" && -z "${PARTITION_FS_LABEL:-}" ]]; then
@@ -114,6 +119,9 @@ sudo chmod +x "$MOUNT_POINT/mnt/build/list-mutter-makedepends.sh"
 if [[ -f "$CHROOT_BUILD_REQUIREMENTS" ]]; then
 	sudo cp "$CHROOT_BUILD_REQUIREMENTS" "$MOUNT_POINT/mnt/build/chroot-build-requirements.txt"
 fi
+sudo cp "$SCRIPT_DIR/install.sh" "$MOUNT_POINT/mnt/build/annotations-install.sh"
+sudo cp "$ANNOTATIONS_GIT_URL_HELPER" "$MOUNT_POINT/mnt/build/annotations-git-url.sh"
+sudo chmod +x "$MOUNT_POINT/mnt/build/annotations-install.sh"
 
 sudo mount --bind "$MUTTER_SRC" "$MOUNT_POINT/mnt/build/mutter"
 CHROOT_BIND_MUTTER=1
@@ -139,28 +147,16 @@ if [[ -f /etc/resolv.conf ]]; then
 	sudo cp /etc/resolv.conf "$MOUNT_POINT/etc/resolv.conf" 2>/dev/null || true
 fi
 
-if [[ "${CHROOT_PACMAN_SYNC:-0}" == "1" ]]; then
-	echo "--- pacman -Sy (CHROOT_PACMAN_SYNC=1) ---"
-	sudo arch-chroot "$MOUNT_POINT" /bin/bash -lc 'pacman -Sy --noconfirm'
-fi
-
-echo "--- Installing build dependencies in chroot (base + mutter Make Depends + requirements file) ---"
-sudo arch-chroot "$MOUNT_POINT" /bin/bash <<'CHROOT_PKGS'
-set -euo pipefail
-extra=$(pacman -Si mutter | bash /mnt/build/list-mutter-makedepends.sh | xargs)
-req=""
-if [[ -f /mnt/build/chroot-build-requirements.txt ]]; then
-	req=$(grep -v '^[[:space:]]*#' /mnt/build/chroot-build-requirements.txt | grep -v '^[[:space:]]*$' | xargs)
-fi
-pacman -S --needed --noconfirm base-devel meson ninja git ${extra:-} ${req:-}
-CHROOT_PKGS
+echo "--- Installing build dependencies in chroot (install.sh --install-chroot-build-deps) ---"
+sudo arch-chroot "$MOUNT_POINT" /usr/bin/env CHROOT_PACMAN_SYNC="${CHROOT_PACMAN_SYNC:-0}" \
+	/bin/bash /mnt/build/annotations-install.sh --install-chroot-build-deps --yes
 
 echo "--- Configuring & building Mutter in chroot ---"
 sudo arch-chroot "$MOUNT_POINT" /bin/bash -lc "
 set -euo pipefail
 cd /mnt/build/mutter
 rm -rf build
-meson setup build --prefix=/usr
+meson setup build --prefix=/usr ${CHROOT_MUTTER_MESON_SETUP_EXTRA}
 ninja -C build
 ninja -C build install
 "
@@ -171,7 +167,7 @@ if [[ "$BUILD_TARGETS" == *shell* ]]; then
 set -euo pipefail
 cd /mnt/build/gnome-shell
 rm -rf build
-meson setup build --prefix=/usr
+meson setup build --prefix=/usr ${CHROOT_SHELL_MESON_SETUP_EXTRA}
 ninja -C build
 ninja -C build install
 "

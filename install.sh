@@ -7,8 +7,13 @@ set -euo pipefail
 #
 # Optional: --init-local-config copies compile_target.local.example when local.sh is missing.
 #
+# Arch chroot: --install-chroot-build-deps installs base-devel, meson, ninja, git,
+# mutter Make Depends from the sync DB, and scripts/chroot-build-requirements.txt
+# (or /mnt/build/chroot-build-requirements.txt when this script lives under /mnt/build).
+# Use --yes to skip the confirmation prompt when stdin is a TTY.
+#
 # When copied to a chroot (e.g. /mnt/build/annotations-install.sh), place
-# annotations-git-url.sh beside it if you want SSH→HTTPS rewriting.
+# annotations-git-url.sh beside it if you want SSH→HTTPS rewriting for git mode.
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [[ -f "$HERE/annotations-git-url.sh" ]]; then
@@ -26,11 +31,14 @@ REMOTE=""
 BRANCH=""
 INIT_LOCAL=0
 NO_HTTPS_REWRITE=0
+INSTALL_CHROOT_DEPS=0
+ASSUME_YES=0
 
 usage() {
-	echo "Usage: $0 [--destination DIR] [--remote URL] [--branch NAME] [--init-local-config] [--no-https-rewrite]"
-	echo "  Default DIR is this script's directory (the annotations project root)."
-	echo "  Without .git under DIR, --remote and --branch are required (HTTPS URL recommended)."
+	echo "Usage:"
+	echo "  $0 [--destination DIR] [--remote URL] [--branch NAME] [--init-local-config] [--no-https-rewrite]"
+	echo "  $0 --install-chroot-build-deps [--yes]"
+	echo "    (run as root inside an Arch chroot with pacman; installs compiler + mutter deps + requirements file)"
 	exit 1
 }
 
@@ -56,6 +64,14 @@ while [[ $# -gt 0 ]]; do
 		NO_HTTPS_REWRITE=1
 		shift
 		;;
+	--install-chroot-build-deps)
+		INSTALL_CHROOT_DEPS=1
+		shift
+		;;
+	-y | --yes)
+		ASSUME_YES=1
+		shift
+		;;
 	-h | --help)
 		usage
 		;;
@@ -65,6 +81,75 @@ while [[ $# -gt 0 ]]; do
 		;;
 	esac
 done
+
+install_chroot_build_dependencies() {
+	if [[ "$(id -u)" -ne 0 ]]; then
+		echo "Error: --install-chroot-build-deps must run as root (e.g. inside arch-chroot)."
+		exit 1
+	fi
+	if ! command -v pacman >/dev/null 2>&1; then
+		echo "Error: pacman not found; this mode is for Arch Linux chroots only."
+		exit 1
+	fi
+
+	local list_script req_file
+	list_script="$HERE/scripts/list-mutter-makedepends.sh"
+	[[ -f /mnt/build/list-mutter-makedepends.sh ]] && list_script="/mnt/build/list-mutter-makedepends.sh"
+	req_file="$HERE/scripts/chroot-build-requirements.txt"
+	[[ -f /mnt/build/chroot-build-requirements.txt ]] && req_file="/mnt/build/chroot-build-requirements.txt"
+
+	if [[ ! -f "$list_script" ]]; then
+		echo "Error: list-mutter-makedepends.sh not found (expected under $HERE/scripts/ or /mnt/build/)."
+		exit 1
+	fi
+	if [[ ! -f "$req_file" ]]; then
+		echo "Warning: chroot-build-requirements.txt not found at $req_file (continuing without extra list)."
+	fi
+
+	if [[ "${CHROOT_PACMAN_SYNC:-0}" == "1" ]]; then
+		echo "--- pacman -Sy (CHROOT_PACMAN_SYNC=1) ---"
+		pacman -Sy --noconfirm
+	fi
+
+	local -a extra_pkgs=()
+	local -a req_pkgs=()
+	set +e
+	local si_out
+	si_out=$(pacman -Si mutter 2>/dev/null)
+	local si_ec=$?
+	set -e
+	if [[ $si_ec -eq 0 ]]; then
+		mapfile -t extra_pkgs < <(printf '%s\n' "$si_out" | bash "$list_script" | grep -v '^[[:space:]]*$')
+	else
+		echo "Warning: pacman -Si mutter failed (sync DB?). Install mutter makedepends manually or set CHROOT_PACMAN_SYNC=1 on the host before chroot."
+	fi
+
+	if [[ -f "$req_file" ]]; then
+		mapfile -t req_pkgs < <(grep -v '^[[:space:]]*#' "$req_file" | grep -v '^[[:space:]]*$')
+	fi
+
+	local -a cmd=(pacman -S --needed --noconfirm base-devel meson ninja git)
+	[[ ${#extra_pkgs[@]} -gt 0 ]] && cmd+=("${extra_pkgs[@]}")
+	[[ ${#req_pkgs[@]} -gt 0 ]] && cmd+=("${req_pkgs[@]}")
+
+	echo "--- Installing chroot build dependencies (${#cmd[@]} arguments to pacman) ---"
+	if [[ -t 0 && "$ASSUME_YES" -ne 1 ]]; then
+		echo "Will run: ${cmd[*]}"
+		read -r -p "Proceed with pacman? [Y/n] " reply
+		if [[ -n "$reply" && "$reply" != [yY]* ]]; then
+			echo "Aborted."
+			exit 1
+		fi
+	fi
+
+	"${cmd[@]}"
+	echo "Chroot build dependencies installed."
+}
+
+if [[ "$INSTALL_CHROOT_DEPS" -eq 1 ]]; then
+	install_chroot_build_dependencies
+	exit 0
+fi
 
 [[ -z "$DEST" ]] && DEST="$HERE"
 

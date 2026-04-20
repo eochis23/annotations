@@ -25,6 +25,15 @@ egl-wayland
 shaderc
 xorg-xwayland
 
+# pkg-config: umockdev-1.0 (mutter meson.build)
+umockdev
+
+# pkg-config: sysprof-4 / sysprof-6 (mutter meson.build)
+sysprof
+
 # When BUILD_TARGETS includes shell, uncomment or add as needed, e.g.:
 # sassc
 # asciidoc
+
+# If you set CHROOT_MUTTER_MESON_SETUP_EXTRA=-Dtests=enabled, add test helpers:
+# python-dbusmock

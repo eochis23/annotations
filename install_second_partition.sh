@@ -30,6 +30,9 @@ if [[ "$BUILD_TARGETS" != *mutter* ]]; then
 	exit 1
 fi
 
+: "${CHROOT_MUTTER_MESON_SETUP_EXTRA:=-Dtests=disabled}"
+: "${CHROOT_SHELL_MESON_SETUP_EXTRA:=-Dtests=false}"
+
 GIT_REMOTE_NAME="${GIT_REMOTE_NAME:-origin}"
 
 if [[ -z "${PARTITION_DEVICE:-}" && -z "${PARTITION_PARTUUID:-}" && -z "${PARTITION_FS_LABEL:-}" ]]; then
@@ -94,9 +97,6 @@ if [[ -f /etc/resolv.conf ]]; then
 	sudo cp /etc/resolv.conf "$MOUNT_POINT/etc/resolv.conf" 2>/dev/null || true
 fi
 
-echo "--- Ensuring git in chroot ---"
-sudo arch-chroot "$MOUNT_POINT" /bin/bash -lc 'command -v git >/dev/null 2>&1 || pacman -S --needed --noconfirm git'
-
 sudo mkdir -p "$MOUNT_POINT/mnt/build"
 sudo cp "$LIST_MUTTER_MAKEDEPENDS" "$MOUNT_POINT/mnt/build/list-mutter-makedepends.sh"
 sudo chmod +x "$MOUNT_POINT/mnt/build/list-mutter-makedepends.sh"
@@ -107,7 +107,11 @@ sudo cp "$SCRIPT_DIR/install.sh" "$MOUNT_POINT/mnt/build/annotations-install.sh"
 sudo cp "$GIT_URL_HELPER" "$MOUNT_POINT/mnt/build/annotations-git-url.sh"
 sudo chmod +x "$MOUNT_POINT/mnt/build/annotations-install.sh"
 
-echo "--- Running install.sh in chroot ($CHROOT_REPO_DIR, branch $BRANCH) ---"
+echo "--- Installing build dependencies in chroot (install.sh --install-chroot-build-deps) ---"
+sudo arch-chroot "$MOUNT_POINT" /usr/bin/env CHROOT_PACMAN_SYNC="${CHROOT_PACMAN_SYNC:-0}" \
+	/bin/bash /mnt/build/annotations-install.sh --install-chroot-build-deps --yes
+
+echo "--- Running install.sh (git) in chroot ($CHROOT_REPO_DIR, branch $BRANCH) ---"
 sudo arch-chroot "$MOUNT_POINT" /usr/bin/env GIT_TERMINAL_PROMPT=0 /bin/bash /mnt/build/annotations-install.sh \
 	--destination "$CHROOT_REPO_DIR" \
 	--remote "$REMOTE" \
@@ -122,37 +126,23 @@ if [[ "$BUILD_TARGETS" == *shell* ]] && [[ ! -f "$MOUNT_POINT/${CHROOT_REPO_DIR#
 	exit 1
 fi
 
-if [[ "${CHROOT_PACMAN_SYNC:-0}" == "1" ]]; then
-	echo "--- pacman -Sy (CHROOT_PACMAN_SYNC=1) ---"
-	sudo arch-chroot "$MOUNT_POINT" /bin/bash -lc 'pacman -Sy --noconfirm'
-fi
-
-echo "--- Installing build dependencies in chroot ---"
-sudo arch-chroot "$MOUNT_POINT" /bin/bash <<'CHROOT_PKGS'
-set -euo pipefail
-extra=$(pacman -Si mutter | bash /mnt/build/list-mutter-makedepends.sh | xargs)
-req=""
-if [[ -f /mnt/build/chroot-build-requirements.txt ]]; then
-	req=$(grep -v '^[[:space:]]*#' /mnt/build/chroot-build-requirements.txt | grep -v '^[[:space:]]*$' | xargs)
-fi
-pacman -S --needed --noconfirm base-devel meson ninja git ${extra:-} ${req:-}
-CHROOT_PKGS
-
 echo "--- Configuring & building in chroot (targets: $BUILD_TARGETS) ---"
 sudo arch-chroot "$MOUNT_POINT" \
 	env BUILD_TARGETS="$BUILD_TARGETS" CHROOT_REPO_DIR="$CHROOT_REPO_DIR" \
+	CHROOT_MUTTER_MESON_SETUP_EXTRA="${CHROOT_MUTTER_MESON_SETUP_EXTRA}" \
+	CHROOT_SHELL_MESON_SETUP_EXTRA="${CHROOT_SHELL_MESON_SETUP_EXTRA}" \
 	/bin/bash <<'CHROOT_BUILD'
 set -euo pipefail
 repo_dir="${CHROOT_REPO_DIR:?}"
 cd "$repo_dir/mutter"
 rm -rf build
-meson setup build --prefix=/usr
+meson setup build --prefix=/usr ${CHROOT_MUTTER_MESON_SETUP_EXTRA}
 ninja -C build
 ninja -C build install
 if [[ "${BUILD_TARGETS:-mutter}" == *shell* ]]; then
 	cd "$repo_dir/gnome-shell"
 	rm -rf build
-	meson setup build --prefix=/usr
+	meson setup build --prefix=/usr ${CHROOT_SHELL_MESON_SETUP_EXTRA}
 	ninja -C build
 	ninja -C build install
 fi
