@@ -26,6 +26,13 @@ sudo tee "$MP/etc/dconf/db/local.d/99-annotation-extension" >/dev/null <<'EOF'
 enabled-extensions=['annotation@annotations.local']
 EOF
 
+sudo mkdir -p "$MP/etc/dconf/db/gdm.d"
+sudo tee "$MP/etc/dconf/db/gdm.d/99-annotation-extension" >/dev/null <<'EOF'
+# Same extension list for GDM greeter shell (pen crash fix needs compositor + extension in sync).
+[org/gnome/shell]
+enabled-extensions=['annotation@annotations.local']
+EOF
+
 sudo arch-chroot "$MP" /bin/bash -lc 'command -v dconf >/dev/null 2>&1 && dconf update || true'
 
 echo "Installed $UUID under $DEST and refreshed dconf in chroot (if dconf is available)."

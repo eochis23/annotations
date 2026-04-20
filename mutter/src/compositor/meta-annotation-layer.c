@@ -12,6 +12,38 @@
 
 #include <cairo.h>
 #include <math.h>
+#include <stdio.h>
+
+/* #region agent log */
+#define ANNOTATION_AGENT_LOG_PRIMARY "/home/eochis/Projects/annotations/.cursor/debug-338895.log"
+#define ANNOTATION_AGENT_LOG_FALLBACK "/tmp/mutter-debug-338895.ndjson"
+
+static void
+annotation_agent_log (const char *hypothesis_id,
+                        const char *location,
+                        const char *message,
+                        int           a,
+                        int           b,
+                        int           c,
+                        int           d)
+{
+  FILE *f = fopen (ANNOTATION_AGENT_LOG_PRIMARY, "a");
+
+  if (!f)
+    f = fopen (ANNOTATION_AGENT_LOG_FALLBACK, "a");
+  if (!f)
+    return;
+
+  fprintf (f,
+           "{\"sessionId\":\"338895\",\"hypothesisId\":\"%s\",\"location\":\"%s\",\"message\":\"%s\","
+           "\"data\":{\"a\":%d,\"b\":%d,\"c\":%d,\"d\":%d},\"timestamp\":%" G_GINT64_FORMAT "}\n",
+           hypothesis_id, location, message, a, b, c, d,
+           (gint64) g_get_monotonic_time ());
+  fflush (f);
+  fclose (f);
+}
+
+/* #endregion */
 
 struct _MetaAnnotationLayer
 {
@@ -46,6 +78,19 @@ sync_texture_from_surface (MetaAnnotationLayer *layer)
 
   if (!layer->surface || !get_cogl_texture (layer))
     return;
+
+  /* #region agent log */
+  {
+    CoglTexture *tex = get_cogl_texture (layer);
+    int cw = cairo_image_surface_get_width (layer->surface);
+    int ch = cairo_image_surface_get_height (layer->surface);
+    int tw = cogl_texture_get_width (tex);
+    int th = cogl_texture_get_height (tex);
+
+    annotation_agent_log ("H_texture", "meta-annotation-layer.c:sync",
+                          "cairo_vs_cogl", cw, ch, tw, th);
+  }
+  /* #endregion */
 
   stride = cairo_image_surface_get_stride (layer->surface);
   data = cairo_image_surface_get_data (layer->surface);
@@ -90,6 +135,10 @@ recreate_buffers (MetaAnnotationLayer *layer,
   if (width < 1 || height < 1)
     return;
 
+  /* Drop actor's content ref before unreffing layer->content (same object); avoids
+   * dangling priv->content / invalid texture on dispose (see coredump in finalize). */
+  if (layer->actor)
+    clutter_actor_set_content (layer->actor, NULL);
   g_clear_object (&layer->content);
   g_clear_pointer (&layer->surface, cairo_surface_destroy);
 
@@ -128,6 +177,11 @@ on_stage_size_changed (ClutterActor         *stage,
   clutter_actor_get_size (stage, &width_f, &height_f);
   width = (int) ceilf (width_f);
   height = (int) ceilf (height_f);
+
+  /* #region agent log */
+  annotation_agent_log ("H_reentrancy", "meta-annotation-layer.c:on_stage_size_changed",
+                        "stage_wh", width, height, 0, 0);
+  /* #endregion */
 
   recreate_buffers (layer, width, height);
   layer->stroke_active = FALSE;
@@ -181,6 +235,8 @@ meta_annotation_layer_destroy (MetaAnnotationLayer *layer)
   g_clear_signal_handler (&layer->width_notify_id, stage);
   g_clear_signal_handler (&layer->height_notify_id, stage);
 
+  if (layer->actor)
+    clutter_actor_set_content (layer->actor, NULL);
   g_clear_object (&layer->content);
   g_clear_pointer (&layer->surface, cairo_surface_destroy);
   g_clear_pointer (&layer->actor, clutter_actor_destroy);
@@ -252,6 +308,13 @@ draw_segment (MetaAnnotationLayer *layer,
   if (!layer->surface)
     return;
 
+  /* #region agent log */
+  annotation_agent_log ("H_coords", "meta-annotation-layer.c:draw_segment",
+                        "line",
+                        (int) floorf (x1), (int) floorf (y1),
+                        (int) floorf (x2), (int) floorf (y2));
+  /* #endregion */
+
   cr = cairo_create (layer->surface);
   cairo_set_source_rgba (cr,
                          layer->rgba[0], layer->rgba[1],
@@ -267,6 +330,8 @@ draw_segment (MetaAnnotationLayer *layer,
   cairo_surface_flush (layer->surface);
   sync_texture_from_surface (layer);
 }
+
+static gboolean pointer_has_draw_button (const ClutterEvent *event);
 
 static gboolean
 pointer_has_draw_button (const ClutterEvent *event)
@@ -290,6 +355,18 @@ meta_annotation_layer_handle_event (MetaAnnotationLayer *layer,
     return FALSE;
 
   type = clutter_event_type (event);
+
+  /* #region agent log */
+  {
+    ClutterInputDevice *dev = clutter_event_get_source_device (event);
+    int dtype = dev ? (int) clutter_input_device_get_device_type (dev) : -1;
+
+    annotation_agent_log ("H_pen_path", "meta-annotation-layer.c:handle_event",
+                          "entry", (int) type, dtype,
+                          layer->stroke_active ? 1 : 0,
+                          pointer_has_draw_button (event) ? 1 : 0);
+  }
+  /* #endregion */
 
   switch (type)
     {

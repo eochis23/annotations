@@ -97,9 +97,16 @@ export default class AnnotationExtension extends Extension {
             this._idlePos = 0;
             return GLib.SOURCE_REMOVE;
         });
+
+        dbusCall('SetActive', new GLib.Variant('(b)', [true]), err => {
+            if (err)
+                console.warn(`Annotation SetActive(true): ${err.message}`);
+        });
     }
 
     disable() {
+        dbusCall('SetActive', new GLib.Variant('(b)', [false]), null);
+
         if (this._monitorsId) {
             Main.layoutManager.disconnect(this._monitorsId);
             this._monitorsId = 0;
