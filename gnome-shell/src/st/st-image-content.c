@@ -71,8 +71,6 @@ st_image_content_constructed (GObject *object)
   if (self->width < 0 || self->height < 0)
     g_warning ("StImageContent initialized with invalid preferred size: %dx%d\n",
                self->width, self->height);
-
-  G_OBJECT_CLASS (st_image_content_parent_class)->constructed (object);
 }
 
 static void
@@ -318,7 +316,6 @@ st_image_load_async (GLoadableIcon       *icon,
   g_autoptr (GTask) task = NULL;
 
   task = g_task_new (icon, cancellable, callback, user_data);
-  g_task_set_source_tag (task, st_image_load_async);
   g_task_set_task_data (task, GINT_TO_POINTER (size), NULL);
   g_task_run_in_thread (task, load_image_thread);
 }

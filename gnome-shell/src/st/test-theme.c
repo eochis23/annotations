@@ -100,7 +100,7 @@ text_decoration_to_string (StTextDecoration decoration)
   else
     g_string_append(result, "none");
 
-  return g_string_free_and_steal (result);
+  return g_string_free (result, FALSE);
 }
 
 static void

@@ -177,7 +177,8 @@ na_tray_manager_class_init (NaTrayManagerClass *klass)
   props[PROP_X11_DISPLAY] =
     g_param_spec_object ("x11-display", NULL, NULL,
                          META_TYPE_X11_DISPLAY,
-                         G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY | G_PARAM_STATIC_NAME);
+                         G_PARAM_READWRITE |
+                         G_PARAM_CONSTRUCT_ONLY);
 
   g_object_class_install_properties (gobject_class, N_PROPS, props);
 }

@@ -501,7 +501,10 @@ cr_parser_error_destroy (CRParserError * a_this)
 {
         g_return_if_fail (a_this);
 
-        g_clear_pointer (&a_this->msg, g_free);
+        if (a_this->msg) {
+                g_free (a_this->msg);
+                a_this->msg = NULL;
+        }
 
         g_free (a_this);
 }
@@ -600,7 +603,10 @@ cr_parser_clear_errors (CRParser * a_this)
                 }
         }
 
-        g_clear_pointer (&PRIVATE (a_this)->err_stack, g_list_free);
+        if (PRIVATE (a_this)->err_stack) {
+                g_list_free (PRIVATE (a_this)->err_stack);
+                PRIVATE (a_this)->err_stack = NULL;
+        }
 
         return CR_OK;
 }
@@ -1364,7 +1370,8 @@ cr_parser_parse_attribute_selector (CRParser * a_this,
         ENSURE_PARSING_COND (status == CR_OK
                              && token && token->type == IDENT_TK);
 
-        result->name = g_steal_pointer (&token->u.str);
+        result->name = token->u.str;
+        token->u.str = NULL;
         cr_token_destroy (token);
         token = NULL;
 
@@ -1400,9 +1407,11 @@ cr_parser_parse_attribute_selector (CRParser * a_this,
         ENSURE_PARSING_COND (status == CR_OK && token);
         
         if (token->type == IDENT_TK) {
-                result->value = g_steal_pointer (&token->u.str);
+                result->value = token->u.str;
+                token->u.str = NULL;
         } else if (token->type == STRING_TK) {
-                result->value = g_steal_pointer (&token->u.str);
+                result->value = token->u.str;
+                token->u.str = NULL;
         } else {
                 status = CR_PARSING_ERROR;
                 goto error;
@@ -1731,7 +1740,8 @@ cr_parser_parse_simple_selector (CRParser * a_this, CRSimpleSel ** a_sel)
                         add_sel = cr_additional_sel_new_with_type
                                 (ID_ADD_SELECTOR);
 
-                        add_sel->content.id_name = g_steal_pointer (&token->u.str);
+                        add_sel->content.id_name = token->u.str;
+                        token->u.str = NULL;
 
                         cr_parsing_location_copy 
                                 (&add_sel->location,
@@ -1756,7 +1766,8 @@ cr_parser_parse_simple_selector (CRParser * a_this, CRSimpleSel ** a_sel)
                                 add_sel = cr_additional_sel_new_with_type
                                         (CLASS_ADD_SELECTOR);
 
-                                add_sel->content.class_name = g_steal_pointer (&token->u.str);
+                                add_sel->content.class_name = token->u.str;
+                                token->u.str = NULL;
 
                                 add_sel_list =
                                         cr_additional_sel_append
@@ -1821,10 +1832,12 @@ cr_parser_parse_simple_selector (CRParser * a_this, CRSimpleSel ** a_sel)
 
                         if (token->type == IDENT_TK) {
                                 pseudo->type = IDENT_PSEUDO;
-                                pseudo->name = g_steal_pointer (&token->u.str);
+                                pseudo->name = token->u.str;
+                                token->u.str = NULL;
                                 found_sel = TRUE;
                         } else if (token->type == FUNCTION_TK) {
-                                pseudo->name = g_steal_pointer (&token->u.str);
+                                pseudo->name = token->u.str;
+                                token->u.str = NULL;
                                 cr_parser_try_to_skip_spaces_and_comments
                                         (a_this);
                                 status = cr_parser_parse_ident
@@ -1866,7 +1879,8 @@ cr_parser_parse_simple_selector (CRParser * a_this, CRSimpleSel ** a_sel)
         if (status == CR_OK && found_sel == TRUE) {
                 cr_parser_try_to_skip_spaces_and_comments (a_this);
 
-                sel->add_sel = g_steal_pointer (&add_sel_list);
+                sel->add_sel = add_sel_list;
+                add_sel_list = NULL;
                 
                 if (*a_sel == NULL) {
                         *a_sel = sel;
@@ -2143,7 +2157,8 @@ cr_parser_parse_function (CRParser * a_this,
                 goto error;
 
         if (token && token->type == FUNCTION_TK) {
-                *a_func_name = g_steal_pointer (&token->u.str);
+                *a_func_name = token->u.str;
+                token->u.str = NULL;
         } else {
                 status = CR_PARSING_ERROR;
                 goto error;
@@ -2465,7 +2480,8 @@ cr_parser_parse_stylesheet (CRParser * a_this)
                                         }
                                 }
 
-                                g_clear_list (&media_list, NULL);
+                                g_list_free (media_list);
+                                media_list = NULL;
                         }
 
                         if (import_string) {
@@ -3214,7 +3230,8 @@ cr_parser_parse_declaration (CRParser * a_this,
                 cr_term_append_term (*a_expr, expr);
                 expr = NULL;
         } else {
-                *a_expr = g_steal_pointer (&expr);
+                *a_expr = expr;
+                expr = NULL;
         }
 
         cr_parser_clear_errors (a_this);
@@ -3654,7 +3671,8 @@ cr_parser_parse_import (CRParser * a_this,
                         }
                 }
 
-                g_clear_list (&*a_media_list, NULL);
+                g_list_free (*a_media_list);
+                *a_media_list = NULL;
         }
 
         if (*a_import_string) {
@@ -3720,7 +3738,8 @@ cr_parser_parse_media (CRParser * a_this)
         ENSURE_PARSING_COND (status == CR_OK
                              && token && token->type == IDENT_TK);
 
-        medium = g_steal_pointer (&token->u.str);
+        medium = token->u.str;
+        token->u.str = NULL;
         cr_token_destroy (token);
         token = NULL;
 
@@ -3805,7 +3824,8 @@ cr_parser_parse_media (CRParser * a_this)
                         cr_string_destroy (cur->data);
                 }
 
-                g_clear_list (&media_list, NULL);
+                g_list_free (media_list);
+                media_list = NULL;
         }
 
         cr_parser_clear_errors (a_this);
@@ -3832,7 +3852,8 @@ cr_parser_parse_media (CRParser * a_this)
                         cr_string_destroy (cur->data);
                 }
 
-                g_clear_list (&media_list, NULL);
+                g_list_free (media_list);
+                media_list = NULL;
         }
 
         cr_tknzr_set_cur_pos (PRIVATE (a_this)->tknzr, &init_pos);
@@ -3887,7 +3908,8 @@ cr_parser_parse_page (CRParser * a_this)
         ENSURE_PARSING_COND (status == CR_OK && token);
 
         if (token->type == IDENT_TK) {
-                page_selector = g_steal_pointer (&token->u.str);
+                page_selector = token->u.str;
+                token->u.str = NULL;
                 cr_token_destroy (token);
                 token = NULL;
         } else {
@@ -4137,7 +4159,8 @@ cr_parser_parse_charset (CRParser * a_this, CRString ** a_value,
         status = cr_tknzr_get_next_token (PRIVATE (a_this)->tknzr, &token);
         ENSURE_PARSING_COND (status == CR_OK
                              && token && token->type == STRING_TK);
-        charset_str = g_steal_pointer (&token->u.str);
+        charset_str = token->u.str;
+        token->u.str = NULL;
         cr_token_destroy (token);
         token = NULL;
 
@@ -4150,7 +4173,10 @@ cr_parser_parse_charset (CRParser * a_this, CRString ** a_value,
         cr_token_destroy (token);
         token = NULL;
 
-        *a_value = g_steal_pointer (&charset_str);
+        if (charset_str) {
+                *a_value = charset_str;
+                charset_str = NULL;
+        }
 
         PRIVATE (a_this)->state = CHARSET_PARSED_STATE;
         return CR_OK;
@@ -4498,5 +4524,8 @@ cr_parser_destroy (CRParser * a_this)
                 PRIVATE (a_this) = NULL;
         }
 
-        g_clear_pointer (&a_this, g_free);
+        if (a_this) {
+                g_free (a_this);
+                a_this = NULL;  /*useless. Just for the sake of coherence */
+        }
 }

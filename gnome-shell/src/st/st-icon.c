@@ -474,7 +474,8 @@ st_icon_finish_update (StIcon *icon)
 
   if (priv->pending_texture)
     {
-      priv->icon_texture = g_steal_pointer (&priv->pending_texture);
+      priv->icon_texture = priv->pending_texture;
+      priv->pending_texture = NULL;
       clutter_actor_set_x_align (priv->icon_texture, CLUTTER_ACTOR_ALIGN_CENTER);
       clutter_actor_set_y_align (priv->icon_texture, CLUTTER_ACTOR_ALIGN_CENTER);
       clutter_actor_add_child (CLUTTER_ACTOR (icon), priv->icon_texture);

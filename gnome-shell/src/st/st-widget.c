@@ -524,7 +524,11 @@ st_widget_style_changed_internal (StWidget         *widget,
   StThemeNode *old_theme_node = NULL;
 
   priv->is_style_dirty = TRUE;
-  old_theme_node = g_steal_pointer (&priv->theme_node);
+  if (priv->theme_node)
+    {
+      old_theme_node = priv->theme_node;
+      priv->theme_node = NULL;
+    }
 
   /* update the style only if we are mapped */
   if (clutter_actor_is_mapped (CLUTTER_ACTOR (widget)))
@@ -2319,7 +2323,7 @@ st_describe_actor (ClutterActor *actor)
 
   g_string_append_c (desc, ']');
 
-  return g_string_free_and_steal (desc);
+  return g_string_free (desc, FALSE);
 }
 
 /**

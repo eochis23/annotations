@@ -263,7 +263,10 @@ cr_input_new_from_uri (const gchar * a_file_uri, enum CREncoding a_enc)
                 file_ptr = NULL;
         }
 
-        g_clear_pointer (&buf, g_free);
+        if (buf) {
+                g_free (buf);
+                buf = NULL;
+        }
 
         return result;
 }

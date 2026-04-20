@@ -513,7 +513,8 @@ cr_statement_clear (CRStatement * a_this)
                                 }
 
                         }
-                        g_clear_list (&a_this->kind.media_rule->media_list, NULL);
+                        g_list_free (a_this->kind.media_rule->media_list);
+                        a_this->kind.media_rule->media_list = NULL;
                 }
                 g_free (a_this->kind.media_rule);
                 a_this->kind.media_rule = NULL;
@@ -622,9 +623,12 @@ cr_statement_ruleset_to_string (CRStatement const * a_this, glong a_indent)
                 cr_utils_dump_n_chars2 (' ', stringue, a_indent);
         }
         g_string_append (stringue, "}");
-        result = g_string_free_and_steal (stringue);
+        result = g_string_free (stringue, FALSE);
 
-        g_clear_pointer (&tmp_str, g_free);
+        if (tmp_str) {
+                g_free (tmp_str);
+                tmp_str = NULL;
+        }
         return result;
 }
 
@@ -671,7 +675,7 @@ cr_statement_font_face_rule_to_string (CRStatement const * a_this,
                 g_string_append (stringue, "\n}");
         }
         if (stringue) {
-                result = g_string_free_and_steal (stringue);
+                result = g_string_free (stringue, FALSE);
                 stringue = NULL ;
         }
         return result ;
@@ -711,10 +715,13 @@ cr_statement_charset_to_string (CRStatement const *a_this,
                 cr_utils_dump_n_chars2 (' ', stringue, a_indent);
                 g_string_append_printf (stringue, 
                                         "@charset \"%s\" ;", str);
-                g_clear_pointer (&str, g_free);
+                if (str) {
+                        g_free (str);
+                        str = NULL;
+                }
         }
         if (stringue) {
-                str = g_string_free_and_steal (stringue);
+                str = g_string_free (stringue, FALSE);
         }
         return str ;
 }
@@ -767,7 +774,7 @@ cr_statement_at_page_rule_to_string (CRStatement const *a_this,
                 }
                 g_string_append (stringue, "\n}\n");
         }
-        result = g_string_free_and_steal (stringue) ;
+        result = g_string_free (stringue, FALSE) ;
         stringue = NULL ;
         return result ;
 }
@@ -828,7 +835,7 @@ cr_statement_media_rule_to_string (CRStatement const *a_this,
                 g_string_append (stringue, "\n}");
         }
         if (stringue) {
-                str = g_string_free_and_steal (stringue) ;
+                str = g_string_free (stringue, FALSE) ;
         }
         return str ;
 }
@@ -888,7 +895,7 @@ cr_statement_import_rule_to_string (CRStatement const *a_this,
                 g_string_append (stringue, " ;");
         }
         if (stringue) {
-                str = g_string_free_and_steal (stringue) ;
+                str = g_string_free (stringue, FALSE) ;
                 stringue = NULL ;
         }
         return str ;
@@ -1130,7 +1137,8 @@ cr_statement_new_ruleset (CRStyleSheet * a_sheet,
 
         if (!result->kind.ruleset) {
                 cr_utils_trace_info ("Out of memory");
-                g_free (result);
+                if (result)
+                        g_free (result);
                 return NULL;
         }
 
@@ -1401,7 +1409,8 @@ cr_statement_at_import_rule_parse_from_buf (const guchar * a_buf,
                                 media_list->data = NULL;
                         }
                 }
-                g_clear_list (&media_list, NULL);
+                g_list_free (media_list);
+                media_list = NULL;
         }
         if (import_string) {
                 cr_string_destroy (import_string);
@@ -2544,7 +2553,7 @@ cr_statement_list_to_string (CRStatement const *a_this, gulong a_indent)
                         str = NULL ;
                 }                
         }
-        str = g_string_free_and_steal (stringue) ;
+        str = g_string_free (stringue, FALSE) ;
         return str ;
 }
 
@@ -2755,14 +2764,20 @@ cr_statement_destroy (CRStatement * a_this)
 
         /*walk backward and free next element */
         for (cur = cur->prev; cur && cur->prev; cur = cur->prev) {
-                g_clear_pointer (&cur->next, g_free);
+                if (cur->next) {
+                        g_free (cur->next);
+                        cur->next = NULL;
+                }
         }
 
         if (!cur)
                 return;
 
         /*free the one remaining list */
-        g_clear_pointer (&cur->next, g_free);
+        if (cur->next) {
+                g_free (cur->next);
+                cur->next = NULL;
+        }
 
         g_free (cur);
         cur = NULL;

@@ -2,10 +2,26 @@
 # compile_target.local.sh is gitignored.
 
 MUTTER_SRC="/home/you/Projects/annotations/mutter"
+# Required only when BUILD_TARGETS includes shell:
 SHELL_SRC="/home/you/Projects/annotations/gnome-shell"
 
-# Where the target root is mounted (DESTDIR install root).
+# Mounted target root (build runs inside this tree via arch-chroot).
 MOUNT_POINT="/run/media/you/volume"
 
-# Filesystem label used to resolve the block device: /dev/disk/by-label/<label>
+# Identify the block device (use ONE primary method):
+# - Two copies of the same OS often share LABEL= — by-label is ambiguous. Prefer:
+# PARTITION_PARTUUID="00000000-0000-4000-8000-000000000000"
+# PARTITION_DEVICE="/dev/nvme0n1p3"
+# - Or a unique filesystem label only on this copy:
+# PARTITION_FS_LABEL="your-root-label"
 PARTITION_FS_LABEL="your-root-label"
+
+# mutter (default) or mutter,shell
+# BUILD_TARGETS=mutter,shell
+
+# Before deps: pacman -Sy in chroot (if sync DB is stale / pacman -Si mutter fails).
+# CHROOT_PACMAN_SYNC=1
+
+# Rollback distro packages on the mounted root (from host), e.g.:
+#   sudo arch-chroot /run/media/you/volume pacman -S --noconfirm mutter
+#   sudo arch-chroot /run/media/you/volume pacman -S --noconfirm gnome-shell

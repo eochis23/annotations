@@ -1,0 +1,103 @@
+========== partition-boot-debug ==========
+date: 2026-04-18T22:53:04-04:00
+host: Linux eric-spectre 6.18.20-1-lts #1 SMP PREEMPT_DYNAMIC Wed, 25 Mar 2026 12:17:34 +0000 x86_64 GNU/Linux
+running as: root (euid=0)
+repo: /home/eochis/Projects/annotations
+LOCAL_CONFIG present: yes
+MOUNT_POINT: /run/media/eric/endeavouros
+PARTITION_FS_LABEL: endeavouros
+
+---------- H1: target mount ----------
+mountpoint -q: YES
+TARGET                      SOURCE         FSTYPE OPTIONS
+/run/media/eric/endeavouros /dev/nvme0n1p3 ext4   rw,relatime,errors=remount-ro
+
+---------- H2: gnome-shell / mutter on target tree ----------
+-rwxr-xr-x 1 root root 63776 Apr 16 12:00 /run/media/eric/endeavouros/usr/bin/gnome-shell
+/run/media/eric/endeavouros/usr/bin/gnome-shell: ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=e5f076aa4ef917fefa4b90c635fcfd9ac1e936c6, for GNU/Linux 4.4.0, with debug_info, not stripped
+      [Requesting program interpreter: /lib64/ld-linux-x86-64.so.2]
+--- libmutter-18.pc (prefix line) ---
+prefix=${pcfiledir}/../..
+--- libmutter-test-18.pc (prefix line) ---
+prefix=${pcfiledir}/../..
+
+---------- H3: ldd inside target root (needs sudo + mount) ----------
+	linux-vdso.so.1 (0x00007f7db9f7e000)
+	libshell-18.so => /usr/lib/gnome-shell/libshell-18.so (0x00007f7db9c00000)
+	libgio-2.0.so.0 => /usr/lib/libgio-2.0.so.0 (0x00007f7db9a2d000)
+	libgobject-2.0.so.0 => /usr/lib/libgobject-2.0.so.0 (0x00007f7db9ef1000)
+	libglib-2.0.so.0 => /usr/lib/libglib-2.0.so.0 (0x00007f7db98d5000)
+	libatk-bridge-2.0.so.0 => /usr/lib/libatk-bridge-2.0.so.0 (0x00007f7db9899000)
+	libgjs.so.0 => /usr/lib/libgjs.so.0 (0x00007f7db96c0000)
+	libmutter-clutter-18.so.0 => not found
+	libgirepository-2.0.so.0 => /usr/lib/libgirepository-2.0.so.0 (0x00007f7db9697000)
+	libmutter-18.so.0 => /usr/lib/libmutter-18.so.0 (0x00007f7db9200000)
+	libc.so.6 => /usr/lib/libc.so.6 (0x00007f7db900f000)
+	libgnome-shell-menu.so => /usr/lib/gnome-shell/libgnome-shell-menu.so (0x00007f7db9ee3000)
+	libst-18.so => /usr/lib/gnome-shell/libst-18.so (0x00007f7db8f45000)
+	libgdk_pixbuf-2.0.so.0 => /usr/lib/libgdk_pixbuf-2.0.so.0 (0x00007f7db965f000)
+	libmutter-mtk-18.so.0 => not found
+	libm.so.6 => /usr/lib/libm.so.6 (0x00007f7db8e27000)
+	libgraphene-1.0.so.0 => /usr/lib/libgraphene-1.0.so.0 (0x00007f7db9641000)
+	libX11.so.6 => /usr/lib/libX11.so.6 (0x00007f7db8ce5000)
+	libmutter-clutter-18.so.0 => not found
+	libmutter-cogl-18.so.0 => not found
+	libpolkit-agent-1.so.0 => /usr/lib/libpolkit-agent-1.so.0 (0x00007f7db9635000)
+	libpolkit-gobject-1.so.0 => /usr/lib/libpolkit-gobject-1.so.0 (0x00007f7db9614000)
+	libgcr-4.so.4 => /usr/lib/libgcr-4.so.4 (0x00007f7db8c5a000)
+	libsystemd.so.0 => /usr/lib/libsystemd.so.0 (0x00007f7db8b30000)
+	libpipewire-0.3.so.0 => /usr/lib/libpipewire-0.3.so.0 (0x00007f7db8a63000)
+	libnm.so.0 => /usr/lib/libnm.so.0 (0x00007f7db88f6000)
+	libsecret-1.so.0 => /usr/lib/libsecret-1.so.0 (0x00007f7db8898000)
+	libcairo.so.2 => /usr/lib/libcairo.so.2 (0x00007f7db875b000)
+	libXfixes.so.3 => /usr/lib/libXfixes.so.3 (0x00007f7db8753000)
+	libgnome-desktop-4.so.2 => /usr/lib/libgnome-desktop-4.so.2 (0x00007f7db8734000)
+	libXext.so.6 => /usr/lib/libXext.so.6 (0x00007f7db8720000)
+	libgmodule-2.0.so.0 => /usr/lib/libgmodule-2.0.so.0 (0x00007f7db8719000)
+	libz.so.1 => /usr/lib/libz.so.1 (0x00007f7db86fe000)
+	libmount.so.1 => /usr/lib/libmount.so.1 (0x00007f7db86a6000)
+	libffi.so.8 => /usr/lib/libffi.so.8 (0x00007f7db869a000)
+	libpcre2-8.so.0 => /usr/lib/libpcre2-8.so.0 (0x00007f7db85ec000)
+	libatspi.so.0 => /usr/lib/libatspi.so.0 (0x00007f7db85b1000)
+	libatk-1.0.so.0 => /usr/lib/libatk-1.0.so.0 (0x00007f7db858b000)
+	libdbus-1.so.3 => /usr/lib/libdbus-1.so.3 (0x00007f7db8538000)
+	libcairo-gobject.so.2 => /usr/lib/libcairo-gobject.so.2 (0x00007f7db852f000)
+	libmozjs-140.so => /usr/lib/libmozjs-140.so (0x00007f7db6000000)
+	libreadline.so.8 => /usr/lib/libreadline.so.8 (0x00007f7db84d4000)
+	libstdc++.so.6 => /usr/lib/libstdc++.so.6 (0x00007f7db5c00000)
+	libgcc_s.so.1 => /usr/lib/libgcc_s.so.1 (0x00007f7db84a7000)
+	libmutter-cogl-18.so.0 => /usr/lib/mutter-18/libmutter-cogl-18.so.0 (0x00007f7db83e2000)
+	libmutter-mtk-18.so.0 => /usr/lib/mutter-18/libmutter-mtk-18.so.0 (0x00007f7db5ff2000)
+	libmutter-clutter-18.so.0 => /usr/lib/mutter-18/libmutter-clutter-18.so.0 (0x00007f7db5e9c000)
+	libwayland-server.so.0 => /usr/lib/libwayland-server.so.0 (0x00007f7db5beb000)
+	libEGL.so.1 => /usr/lib/libEGL.so.1 (0x00007f7db5bd9000)
+	libGL.so.1 => /usr/lib/libGL.so.1 (0x00007f7db5b67000)
+	libxkbcommon.so.0 => /usr/lib/libxkbcommon.so.0 (0x00007f7db5b0a000)
+	liblcms2.so.2 => /usr/lib/liblcms2.so.2 (0x00007f7db5aa2000)
+	libXi.so.6 => /usr/lib/libXi.so.6 (0x00007f7db5a8f000)
+	libcolord.so.2 => /usr/lib/libcolord.so.2 (0x00007f7db5a38000)
+	libxkbregistry.so.0 => /usr/lib/libxkbregistry.so.0 (0x00007f7db83d5000)
+	libglycin-2.so.0 => /usr/lib/libglycin-2.so.0 (0x00007f7db5600000)
+	libeis.so.1 => /usr/lib/libeis.so.1 (0x00007f7db5a1a000)
+	libdisplay-info.so.3 => /usr/lib/libdisplay-info.so.3 (0x00007f7db55c7000)
+	libdrm.so.2 => /usr/lib/libdrm.so.2 (0x00007f7db5a03000)
+	libcanberra.so.0 => /usr/lib/libcanberra.so.0 (0x00007f7db55b5000)
+
+---------- H4: journal on target (previous boot errors) ----------
+total 24
+drwxr-sr-x+ 4 root systemd-coredump 4096 Apr 15 13:25 .
+drwxr-xr-x  9 root root             4096 Apr 15 13:25 ..
+drwxr-sr-x+ 2 root systemd-coredump 4096 Apr 18 01:20 8e5c31396b404476b5a01abb6c941e2a
+drwxr-sr-x  2 root systemd-timesync 4096 Apr 15 13:13 remote
+
+---------- H5: host vs target glib (link vs runtime skew hint) ----------
+glib2 2.86.4-1
+mutter 49.5-1
+gnome-shell 1:49.5-1
+lrwxrwxrwx 1 root root      16 Mar 16 18:20 /run/media/eric/endeavouros/usr/lib/libglib-2.0.so -> libglib-2.0.so.0
+lrwxrwxrwx 1 root root      23 Mar 16 18:20 /run/media/eric/endeavouros/usr/lib/libglib-2.0.so.0 -> libglib-2.0.so.0.8800.0
+-rwxr-xr-x 1 root root 1404256 Mar 16 18:20 /run/media/eric/endeavouros/usr/lib/libglib-2.0.so.0.8800.0
+
+---------- done ----------
+Report: /home/eochis/Projects/annotations/.cursor/partition-boot-debug-report.txt
+NDJSON: /home/eochis/Projects/annotations/.cursor/debug-78a20e.log

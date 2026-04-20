@@ -323,7 +323,7 @@ cr_additional_sel_to_string (CRAdditionalSel const * a_this)
         }
 
         if (str_buf) {
-                result = (guchar *) g_string_free_and_steal (str_buf);
+                result = (guchar *) g_string_free (str_buf, FALSE);
                 str_buf = NULL;
         }
 
@@ -421,7 +421,7 @@ cr_additional_sel_one_to_string (CRAdditionalSel const *a_this)
         }
 
         if (str_buf) {
-                result = (guchar *) g_string_free_and_steal (str_buf);
+                result = (guchar *) g_string_free (str_buf, FALSE);
                 str_buf = NULL;
         }
 

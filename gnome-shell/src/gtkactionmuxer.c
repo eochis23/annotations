@@ -941,5 +941,5 @@ gtk_print_action_and_target (const gchar *action_namespace,
 
   g_string_append (result, action_name);
 
-  return g_string_free_and_steal (result);
+  return g_string_free (result, FALSE);
 }

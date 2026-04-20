@@ -619,7 +619,6 @@ shell_util_systemd_call (const char           *command,
                          gpointer              user_data)
 {
   g_autoptr (GTask) task = g_task_new (NULL, cancellable, callback, user_data);
-  g_task_set_source_tag (task, shell_util_systemd_call);
   g_autoptr (GVariant) params_owned = g_variant_ref_sink (g_steal_pointer (&params));
 
 #ifdef HAVE_SYSTEMD

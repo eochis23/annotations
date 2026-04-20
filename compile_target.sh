@@ -2,209 +2,203 @@
 set -euo pipefail
 # Run with an absolute path, e.g. /home/eochis/Projects/annotations/compile_target.sh
 # (A path like ./home/... is wrong: it looks for ./home relative to the current directory.)
+#
+# Builds Mutter (and optionally GNOME Shell) with meson/ninja *inside* the mounted target
+# root via arch-chroot, so libraries and toolchain match the OS that will run them.
 
 # ==========================================
 # 1. Configuration
 # ==========================================
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-HOST_TOOLS_INI="$SCRIPT_DIR/host-tools.ini"
 LOCAL_CONFIG="$SCRIPT_DIR/compile_target.local.sh"
+LIST_MUTTER_MAKEDEPENDS="$SCRIPT_DIR/scripts/list-mutter-makedepends.sh"
 
 if [ ! -f "$LOCAL_CONFIG" ]; then
-    echo "Error: Missing $LOCAL_CONFIG. Copy compile_target.local.example to compile_target.local.sh and set paths."
-    exit 1
+	echo "Error: Missing $LOCAL_CONFIG. Copy compile_target.local.example to compile_target.local.sh and set paths."
+	exit 1
 fi
 # shellcheck source=compile_target.local.example
 . "$LOCAL_CONFIG"
 
 : "${MUTTER_SRC:?Set MUTTER_SRC in compile_target.local.sh}"
-: "${SHELL_SRC:?Set SHELL_SRC in compile_target.local.sh}"
 : "${MOUNT_POINT:?Set MOUNT_POINT in compile_target.local.sh}"
-: "${PARTITION_FS_LABEL:?Set PARTITION_FS_LABEL in compile_target.local.sh}"
 
-PARTITION_DEVICE=$(readlink -f "/dev/disk/by-label/$PARTITION_FS_LABEL" 2>/dev/null || true)
+BUILD_TARGETS="${BUILD_TARGETS:-mutter}"
+BUILD_TARGETS="${BUILD_TARGETS,,}"
 
-# When 1, PKG_CONFIG_SYSROOT_DIR=$MOUNT_POINT so every pkg-config path is under the
-# mount (glibc, glib, gtk, mutter, …). Mixing host GCC with that root's glibc headers
-# often breaks GNOME Shell with -Werror=redundant-decls; CFLAGS adds
-# -Wno-error=redundant-decls in that mode.
-#
-# Default 0: host glib/gtk/etc. from /usr; Mutter from the partition. After Mutter
-# DESTDIR install, this script rewrites Mutter *.pc prefix from /usr to
-# prefix=${pcfiledir}/../.. so -I/-L point at $MOUNT_POINT/usr/... without forcing a
-# full sysroot (see fix_mutters_destdir_pc_prefixes).
-#
-# For a pure sysroot/chroot build, USE_DESTDIR_SYSROOT=1 is appropriate.
-USE_DESTDIR_SYSROOT="${USE_DESTDIR_SYSROOT:-0}"
+if [[ "$BUILD_TARGETS" != *mutter* ]]; then
+	echo "Error: BUILD_TARGETS must include mutter (got: $BUILD_TARGETS)"
+	exit 1
+fi
+if [[ "$BUILD_TARGETS" == *shell* ]]; then
+	: "${SHELL_SRC:?Set SHELL_SRC in compile_target.local.sh when BUILD_TARGETS includes shell}"
+fi
+
+# Block device: prefer PARTITION_DEVICE or PARTITION_PARTUUID when two copies share LABEL.
+if [[ -z "${PARTITION_DEVICE:-}" && -z "${PARTITION_PARTUUID:-}" && -z "${PARTITION_FS_LABEL:-}" ]]; then
+	echo "Error: Set one of PARTITION_DEVICE, PARTITION_PARTUUID, or PARTITION_FS_LABEL in compile_target.local.sh"
+	exit 1
+fi
+if [[ -n "${PARTITION_DEVICE:-}" && -b "$PARTITION_DEVICE" ]]; then
+	PARTITION_DEVICE=$(readlink -f "$PARTITION_DEVICE")
+elif [[ -n "${PARTITION_PARTUUID:-}" ]]; then
+	PARTITION_DEVICE=$(readlink -f "/dev/disk/by-partuuid/${PARTITION_PARTUUID}" 2>/dev/null || true)
+elif [[ -n "${PARTITION_FS_LABEL:-}" ]]; then
+	PARTITION_DEVICE=$(readlink -f "/dev/disk/by-label/${PARTITION_FS_LABEL}" 2>/dev/null || true)
+else
+	PARTITION_DEVICE=""
+fi
 
 WE_MOUNTED=0
+CHROOT_BIND_MUTTER=0
+CHROOT_BIND_SHELL=0
 
-# Function to clean up on exit
+chroot_cleanup_binds() {
+	if [[ "$CHROOT_BIND_SHELL" -eq 1 ]]; then
+		sudo umount "$MOUNT_POINT/mnt/build/gnome-shell" 2>/dev/null || true
+		CHROOT_BIND_SHELL=0
+	fi
+	if [[ "$CHROOT_BIND_MUTTER" -eq 1 ]]; then
+		sudo umount "$MOUNT_POINT/mnt/build/mutter" 2>/dev/null || true
+		CHROOT_BIND_MUTTER=0
+	fi
+}
+
 cleanup() {
-    if [ "$WE_MOUNTED" -eq 1 ]; then
-        echo "Unmounting $MOUNT_POINT..."
-        sudo umount "$MOUNT_POINT"
-    fi
+	chroot_cleanup_binds
+	if [ "$WE_MOUNTED" -eq 1 ]; then
+		echo "Unmounting $MOUNT_POINT..."
+		sudo umount "$MOUNT_POINT"
+	fi
 }
 
 # ==========================================
-# 2. Pre-Build Cleanup
+# 2. Pre-Build Cleanup (host-side build dirs)
 # ==========================================
-echo "--- Cleaning old build directories ---"
+echo "--- Cleaning old build directories (host trees) ---"
 rm -rf "$MUTTER_SRC/build"
-rm -rf "$SHELL_SRC/build"
+[[ -n "${SHELL_SRC:-}" ]] && rm -rf "$SHELL_SRC/build"
 echo "Cleanup complete."
 
 # ==========================================
-# 3. Mount Logic
+# 3. Mount target root
 # ==========================================
 if [ -z "$PARTITION_DEVICE" ] || [ ! -b "$PARTITION_DEVICE" ]; then
-    echo "Error: Could not resolve block device for label '$PARTITION_FS_LABEL' (readlink: ${PARTITION_DEVICE:-empty})"
-    exit 1
+	echo "Error: Could not resolve block device (got: ${PARTITION_DEVICE:-empty})."
+	echo "If two installs share LABEL=, set PARTITION_PARTUUID or PARTITION_DEVICE in compile_target.local.sh."
+	exit 1
 fi
 
 if ! mountpoint -q "$MOUNT_POINT"; then
-    echo "Mounting $PARTITION_DEVICE to $MOUNT_POINT..."
-    sudo mkdir -p "$MOUNT_POINT"
-    sudo mount "$PARTITION_DEVICE" "$MOUNT_POINT"
-    WE_MOUNTED=1
+	echo "Mounting $PARTITION_DEVICE to $MOUNT_POINT..."
+	sudo mkdir -p "$MOUNT_POINT"
+	sudo mount "$PARTITION_DEVICE" "$MOUNT_POINT"
+	WE_MOUNTED=1
 fi
 
-# Set the trap to unmount if we mounted this run
 trap cleanup EXIT
 
 # ==========================================
-# Host tools for Meson (codegen stays on host)
+# 4. Chroot build (arch-chroot + bind-mounted sources)
 # ==========================================
-write_host_tools_ini() {
-    cat <<'EOF' > "$HOST_TOOLS_INI"
-[binaries]
-glib-mkenums = '/usr/bin/glib-mkenums'
-glib-genmarshal = '/usr/bin/glib-genmarshal'
-gdbus-codegen = '/usr/bin/gdbus-codegen'
-glib-compile-resources = '/usr/bin/glib-compile-resources'
-glib-compile-schemas = '/usr/bin/glib-compile-schemas'
-wayland-scanner = '/usr/bin/wayland-scanner'
-g-ir-scanner = '/usr/bin/g-ir-scanner'
-g-ir-compiler = '/usr/bin/g-ir-compiler'
-g-ir-generate = '/usr/bin/g-ir-generate'
-EOF
-}
-
-write_host_tools_ini
-
-# Mutter's installed *.pc use prefix=/usr; under PKG_CONFIG_PATH alone, pkg-config
-# expands that to host /usr (no headers there when Mutter only exists under DESTDIR).
-# Point prefix at the .pc's ../../ (…/usr) so includes/libs resolve on the mount.
-fix_mutters_destdir_pc_prefixes() {
-    local pc_dir="$MOUNT_POINT/usr/lib/pkgconfig"
-    local f
-    shopt -s nullglob
-    for f in "$pc_dir"/libmutter*.pc "$pc_dir"/mutter-*.pc; do
-        if grep -q '^prefix=/usr$' "$f"; then
-            # sed -i creates a temp file next to the target; DESTDIR tree is root-owned.
-            sudo sed -i '1s#^prefix=/usr$#prefix=${pcfiledir}/../..#' "$f"
-        fi
-    done
-    shopt -u nullglob
-}
-
-# ==========================================
-# 4. Build & Install Mutter
-# ==========================================
-echo "--- Building Mutter ---"
-cd "$MUTTER_SRC" || { echo "Error: Mutter source not found at $MUTTER_SRC"; exit 1; }
-
-if [ ! -f "meson.build" ]; then
-    echo "Error: meson.build is missing. The source code in $MUTTER_SRC appears to be empty."
-    exit 1
+if ! command -v arch-chroot >/dev/null 2>&1; then
+	echo "Error: arch-chroot not found. Install: sudo pacman -S arch-install-scripts"
+	exit 1
 fi
 
-echo "--- Configuring Mutter (meson setup) ---"
-if ! meson setup build --prefix=/usr --native-file "$HOST_TOOLS_INI"; then
-    echo "Meson setup failed for Mutter."
-    exit 1
+echo "--- Building inside $MOUNT_POINT (target toolchain via arch-chroot) ---"
+sudo mkdir -p "$MOUNT_POINT/mnt/build/mutter" "$MOUNT_POINT/mnt/build"
+sudo cp "$LIST_MUTTER_MAKEDEPENDS" "$MOUNT_POINT/mnt/build/list-mutter-makedepends.sh"
+sudo chmod +x "$MOUNT_POINT/mnt/build/list-mutter-makedepends.sh"
+
+sudo mount --bind "$MUTTER_SRC" "$MOUNT_POINT/mnt/build/mutter"
+CHROOT_BIND_MUTTER=1
+
+if [[ "$BUILD_TARGETS" == *shell* ]]; then
+	sudo mkdir -p "$MOUNT_POINT/mnt/build/gnome-shell"
+	sudo mount --bind "$SHELL_SRC" "$MOUNT_POINT/mnt/build/gnome-shell"
+	CHROOT_BIND_SHELL=1
 fi
 
-echo "--- Compiling Mutter (ninja) ---"
-if ! ninja -C build; then
-    echo "Ninja compilation failed for Mutter."
-    exit 1
+if [[ ! -f "$MOUNT_POINT/mnt/build/mutter/meson.build" ]]; then
+	echo "Error: meson.build missing under bind-mounted Mutter source."
+	exit 1
 fi
 
-echo "--- Installing Mutter to $MOUNT_POINT (DESTDIR) ---"
-# With DESTDIR, Meson skips post-install scripts and some versions still return
-# non-zero; treat success if the tree was installed (libmutter pkg-config present).
-if ! sudo env DESTDIR="$MOUNT_POINT" meson install -C build; then
-    if [ -f "$MOUNT_POINT/usr/lib/pkgconfig/libmutter-18.pc" ]; then
-        echo "Note: meson install exited non-zero (common when DESTDIR skips install scripts); artifacts look OK, continuing."
-    else
-        echo "meson install failed for Mutter and libmutter-18.pc is missing under $MOUNT_POINT/usr/lib/pkgconfig."
-        exit 1
-    fi
+if [[ "$BUILD_TARGETS" == *shell* ]] && [[ ! -f "$MOUNT_POINT/mnt/build/gnome-shell/meson.build" ]]; then
+	echo "Error: meson.build missing under bind-mounted GNOME Shell source."
+	exit 1
 fi
 
-if [ "$USE_DESTDIR_SYSROOT" != "1" ]; then
-    echo "--- Rewriting Mutter pkg-config prefix for DESTDIR (pcfiledir) ---"
-    fix_mutters_destdir_pc_prefixes
+# DNS for pacman inside chroot (best-effort)
+if [[ -f /etc/resolv.conf ]]; then
+	sudo cp /etc/resolv.conf "$MOUNT_POINT/etc/resolv.conf" 2>/dev/null || true
 fi
 
-# ==========================================
-# 5. Build & Install GNOME Shell
-# ==========================================
-echo "--- Building GNOME Shell ---"
-cd "$SHELL_SRC" || { echo "Error: GNOME Shell source not found at $SHELL_SRC"; exit 1; }
-
-if [ ! -f "meson.build" ]; then
-    echo "Error: meson.build is missing in $SHELL_SRC."
-    exit 1
+if [[ "${CHROOT_PACMAN_SYNC:-0}" == "1" ]]; then
+	echo "--- pacman -Sy (CHROOT_PACMAN_SYNC=1) ---"
+	sudo arch-chroot "$MOUNT_POINT" /bin/bash -lc 'pacman -Sy --noconfirm'
 fi
 
-MUTTER_PC_DIR="$MOUNT_POINT/usr/lib/pkgconfig"
-if [ ! -f "$MUTTER_PC_DIR/libmutter-18.pc" ]; then
-    echo "Error: libmutter-18.pc not found under $MUTTER_PC_DIR after Mutter install."
-    exit 1
+echo "--- Installing build dependencies in chroot (base + mutter Make Depends from sync DB) ---"
+sudo arch-chroot "$MOUNT_POINT" /bin/bash <<'CHROOT_PKGS'
+set -euo pipefail
+extra=$(pacman -Si mutter | bash /mnt/build/list-mutter-makedepends.sh | xargs)
+pacman -S --needed --noconfirm base-devel meson ninja git ${extra:-}
+CHROOT_PKGS
+
+echo "--- Configuring & building Mutter in chroot ---"
+sudo arch-chroot "$MOUNT_POINT" /bin/bash -lc "
+set -euo pipefail
+cd /mnt/build/mutter
+rm -rf build
+meson setup build --prefix=/usr
+ninja -C build
+ninja -C build install
+"
+
+if [[ "$BUILD_TARGETS" == *shell* ]]; then
+	echo "--- Configuring & building GNOME Shell in chroot ---"
+	sudo arch-chroot "$MOUNT_POINT" /bin/bash -lc "
+set -euo pipefail
+cd /mnt/build/gnome-shell
+rm -rf build
+meson setup build --prefix=/usr
+ninja -C build
+ninja -C build install
+"
 fi
 
-# Prefer Mutter from the target partition; keep host fallbacks for other deps.
-export PKG_CONFIG_PATH="$MUTTER_PC_DIR:$MOUNT_POINT/usr/share/pkgconfig:${PKG_CONFIG_PATH:-}"
+echo "--- Updating target caches (chroot) ---"
+sudo arch-chroot "$MOUNT_POINT" /bin/bash -lc 'ldconfig; glib-compile-schemas /usr/share/glib-2.0/schemas/ 2>/dev/null || true'
 
-if [ "$USE_DESTDIR_SYSROOT" = "1" ]; then
-    export PKG_CONFIG_SYSROOT_DIR="$MOUNT_POINT"
-    # Mitigate host-GCC + foreign-root glibc header quirks if you insist on sysroot.
-    export CFLAGS="${CFLAGS:+$CFLAGS }-Wno-error=redundant-decls"
+echo "--- Verifying key libraries in chroot (ldd) ---"
+set +e
+if [[ "$BUILD_TARGETS" == *shell* ]] && [[ -f "$MOUNT_POINT/usr/bin/gnome-shell" ]]; then
+	ldd_out=$(sudo arch-chroot "$MOUNT_POINT" /usr/bin/ldd /usr/bin/gnome-shell 2>&1)
+	ldd_ec=$?
+	if [[ $ldd_ec -ne 0 ]]; then
+		echo "WARNING: ldd /usr/bin/gnome-shell failed (exit $ldd_ec)"
+		echo "$ldd_out" | tail -20
+	else
+		echo "ldd /usr/bin/gnome-shell: OK"
+	fi
 else
-    unset PKG_CONFIG_SYSROOT_DIR
+	m_so=$(find "$MOUNT_POINT/usr/lib" -maxdepth 3 -name 'libmutter-*.so.0' 2>/dev/null | head -1)
+	if [[ -n "$m_so" ]]; then
+		rel=${m_so#"$MOUNT_POINT"}
+		ldd_out=$(sudo arch-chroot "$MOUNT_POINT" /usr/bin/ldd "$rel" 2>&1)
+		ldd_ec=$?
+		if [[ $ldd_ec -ne 0 ]]; then
+			echo "WARNING: ldd mutter lib failed (exit $ldd_ec)"
+			echo "$ldd_out" | tail -15
+		else
+			echo "ldd $rel: OK"
+		fi
+	else
+		echo "Note: could not find libmutter-*.so.0 for ldd check."
+	fi
 fi
+set -e
 
-# We pass the --native-file flag so codegen tools stay on the host
-echo "--- Configuring GNOME Shell (meson setup) ---"
-if ! meson setup build --prefix=/usr --native-file "$HOST_TOOLS_INI"; then
-    echo "Meson setup failed for GNOME Shell."
-    exit 1
-fi
-
-echo "--- Compiling GNOME Shell (ninja) ---"
-if ! ninja -C build; then
-    echo "Ninja compilation failed for GNOME Shell."
-    exit 1
-fi
-
-echo "--- Installing GNOME Shell to $MOUNT_POINT (DESTDIR) ---"
-if ! sudo env DESTDIR="$MOUNT_POINT" meson install -C build; then
-    if [ -f "$MOUNT_POINT/usr/bin/gnome-shell" ] || [ -d "$MOUNT_POINT/usr/share/gnome-shell" ]; then
-        echo "Note: meson install exited non-zero (DESTDIR); GNOME Shell paths found under DESTDIR, continuing."
-    else
-        echo "meson install failed for GNOME Shell; expected binaries not found under $MOUNT_POINT."
-        exit 1
-    fi
-fi
-
-# ==========================================
-# 6. Post-Install Triggers
-# ==========================================
-echo "--- Updating Target System Cache ---"
-sudo ldconfig -r "$MOUNT_POINT"
-sudo glib-compile-schemas "$MOUNT_POINT/usr/share/glib-2.0/schemas/"
-
-echo "Success! Mutter and GNOME Shell were built and installed under $MOUNT_POINT (prefix /usr)."
+echo "Success! Installed under $MOUNT_POINT/usr (targets: $BUILD_TARGETS)."

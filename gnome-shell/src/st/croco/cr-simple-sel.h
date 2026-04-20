@@ -55,12 +55,12 @@ typedef struct _CRSimpleSel CRSimpleSel ;
 
 /**
  *The abstraction of a css2 simple selection list
- *as defined by the right part of the "selector" production in the
+ *as defined by the right part of the "selector" production in the 
  *appendix D.1 of the css2 spec.
  *It is basically a list of simple selector, each
  *simple selector being separated by a combinator.
  *
- *In the libcroco's implementation, each simple selector
+ *In the libcroco's implementation, each simple selector 
  *is made of at most two parts:
  *
  *1/An element name or 'type selector' (which can hold a '*' and
@@ -105,10 +105,10 @@ struct _CRSimpleSel
 
 CRSimpleSel * cr_simple_sel_new (void) ;
 
-CRSimpleSel * cr_simple_sel_append_simple_sel (CRSimpleSel *a_this,
+CRSimpleSel * cr_simple_sel_append_simple_sel (CRSimpleSel *a_this, 
                                                CRSimpleSel *a_sel) ;
 
-CRSimpleSel * cr_simple_sel_prepend_simple_sel (CRSimpleSel *a_this,
+CRSimpleSel * cr_simple_sel_prepend_simple_sel (CRSimpleSel *a_this, 
                                                 CRSimpleSel *a_sel) ;
 
 guchar * cr_simple_sel_to_string (CRSimpleSel const *a_this) ;
@@ -116,6 +116,8 @@ guchar * cr_simple_sel_to_string (CRSimpleSel const *a_this) ;
 guchar * cr_simple_sel_one_to_string (CRSimpleSel const * a_this) ;
 
 enum CRStatus cr_simple_sel_dump (CRSimpleSel const *a_this, FILE *a_fp) ;
+
+enum CRStatus cr_simple_sel_dump_attr_sel_list (CRSimpleSel const *a_this) ;
 
 enum CRStatus cr_simple_sel_compute_specificity (CRSimpleSel *a_this) ;
 

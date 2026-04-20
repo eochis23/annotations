@@ -77,12 +77,8 @@ enum
   PROP_0,
   PROP_APPLICATION_STYLESHEET,
   PROP_THEME_STYLESHEET,
-  PROP_DEFAULT_STYLESHEET,
-
-  N_PROPS
+  PROP_DEFAULT_STYLESHEET
 };
-
-static GParamSpec *props[N_PROPS] = { NULL, };
 
 enum
 {
@@ -135,9 +131,11 @@ st_theme_class_init (StThemeClass *klass)
    * The highest priority stylesheet, representing application-specific
    * styling; this is associated with the CSS "author" stylesheet.
    */
-  props[PROP_APPLICATION_STYLESHEET] = g_param_spec_object ("application-stylesheet", NULL, NULL,
-                                                            G_TYPE_FILE,
-                                                            ST_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY);
+  g_object_class_install_property (object_class,
+                                   PROP_APPLICATION_STYLESHEET,
+                                   g_param_spec_object ("application-stylesheet", NULL, NULL,
+                                                        G_TYPE_FILE,
+                                                        ST_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY));
 
   /**
    * StTheme:theme-stylesheet:
@@ -145,9 +143,11 @@ st_theme_class_init (StThemeClass *klass)
    * The second priority stylesheet, representing theme-specific styling;
    * this is associated with the CSS "user" stylesheet.
    */
-  props[PROP_THEME_STYLESHEET] = g_param_spec_object ("theme-stylesheet", NULL, NULL,
-                                                      G_TYPE_FILE,
-                                                      ST_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY);
+  g_object_class_install_property (object_class,
+                                   PROP_THEME_STYLESHEET,
+                                   g_param_spec_object ("theme-stylesheet", NULL, NULL,
+                                                        G_TYPE_FILE,
+                                                        ST_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY));
 
   /**
    * StTheme:default-stylesheet:
@@ -155,11 +155,11 @@ st_theme_class_init (StThemeClass *klass)
    * The lowest priority stylesheet, representing global default
    * styling; this is associated with the CSS "user agent" stylesheet.
    */
-  props[PROP_DEFAULT_STYLESHEET] = g_param_spec_object ("default-stylesheet", NULL, NULL,
+  g_object_class_install_property (object_class,
+                                   PROP_DEFAULT_STYLESHEET,
+                                   g_param_spec_object ("default-stylesheet", NULL, NULL,
                                                         G_TYPE_FILE,
-                                                        ST_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY);
-
-  g_object_class_install_properties (object_class, N_PROPS, props);
+                                                        ST_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY));
 
   signals[STYLESHEETS_CHANGED] =
     g_signal_new ("custom-stylesheets-changed",
@@ -387,7 +387,8 @@ st_theme_finalize (GObject * object)
   StTheme *theme = ST_THEME (object);
 
   g_slist_foreach (theme->custom_stylesheets, (GFunc) cr_stylesheet_unref, NULL);
-  g_clear_slist (&theme->custom_stylesheets, NULL);
+  g_slist_free (theme->custom_stylesheets);
+  theme->custom_stylesheets = NULL;
 
   g_hash_table_destroy (theme->stylesheets_by_file);
   g_hash_table_destroy (theme->files_by_stylesheet);

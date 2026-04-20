@@ -248,7 +248,7 @@ shell_keyring_prompt_get_property (GObject    *obj,
     g_value_set_int (value, self->password_strength);
     break;
   case PROP_CALLER_WINDOW:
-    g_value_set_static_string (value, "");
+    g_value_set_string (value, "");
     break;
   case PROP_CONTINUE_LABEL:
     g_value_set_string (value, self->continue_label);

@@ -561,7 +561,6 @@ shell_mime_sniffer_sniff_async (ShellMimeSniffer *self,
   self->cancellable = g_cancellable_new ();
   self->task = g_task_new (self, self->cancellable,
                            callback, user_data);
-  g_task_set_source_tag (self->task, shell_mime_sniffer_sniff_async);
 
   self->watchdog_id =
     g_timeout_add_once (WATCHDOG_TIMEOUT,

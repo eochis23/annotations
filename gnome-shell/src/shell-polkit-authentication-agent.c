@@ -396,7 +396,6 @@ initiate_authentication (PolkitAgentListener  *listener,
   request->identities = g_list_copy (identities);
   g_list_foreach (request->identities, (GFunc) g_object_ref, NULL);
   request->simple = g_task_new (listener, NULL, callback, user_data);
-  g_task_set_source_tag (request->simple, initiate_authentication);
   request->cancellable = cancellable;
   request->handler_id = g_cancellable_connect (request->cancellable,
                                                G_CALLBACK (on_request_cancelled),

@@ -2960,7 +2960,7 @@ font_family_from_terms (CRTerm *term,
  out:
   if (result)
     {
-      *family = g_string_free_and_steal (family_string);
+      *family = g_string_free (family_string, FALSE);
       return TRUE;
     }
   else
@@ -4555,5 +4555,5 @@ st_theme_node_to_string (StThemeNode *node)
 
   g_string_append_c (desc, ']');
 
-  return g_string_free_and_steal (desc);
+  return g_string_free (desc, FALSE);
 }

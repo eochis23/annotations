@@ -161,7 +161,7 @@ button_click_gesture_notify_pressed_cb (GObject    *gobject,
   else
     st_widget_remove_style_pseudo_class (widget, "active");
 
-  g_object_notify_by_pspec (G_OBJECT (widget), props[PROP_PRESSED]);
+  g_object_notify (G_OBJECT (widget), "pressed");
 }
 
 static gboolean

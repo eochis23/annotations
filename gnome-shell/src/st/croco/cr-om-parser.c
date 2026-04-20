@@ -249,7 +249,8 @@ end_font_face (CRDocHandler * a_this)
         if (!stmts)
                 goto error;
 
-        ctxt->stylesheet->statements = g_steal_pointer (&stmts);
+        ctxt->stylesheet->statements = stmts;
+        stmts = NULL;
         ctxt->cur_stmt = NULL;
 
         return;
@@ -329,7 +330,8 @@ charset (CRDocHandler * a_this, CRString * a_charset,
                 }
                 return;
         }
-        ctxt->stylesheet->statements = g_steal_pointer (&stmt2);
+        ctxt->stylesheet->statements = stmt2;
+        stmt2 = NULL;
 }
 
 static void
@@ -402,7 +404,8 @@ end_page (CRDocHandler * a_this,
                                     ctxt->cur_stmt);
 
         if (stmt) {
-                ctxt->stylesheet->statements = g_steal_pointer (&stmt);
+                ctxt->stylesheet->statements = stmt;
+                stmt = NULL;
                 ctxt->cur_stmt = NULL;
         }
 
@@ -474,7 +477,8 @@ end_media (CRDocHandler * a_this, GList * a_media_list)
                 ctxt->cur_media_stmt = NULL;
         }
 
-        ctxt->stylesheet->statements = g_steal_pointer (&stmts);
+        ctxt->stylesheet->statements = stmts;
+        stmts = NULL;
 
         ctxt->cur_stmt = NULL ;
         ctxt->cur_media_stmt = NULL ;
@@ -522,14 +526,16 @@ import_style (CRDocHandler * a_this,
                 stmt2 = cr_statement_append (ctxt->cur_stmt, stmt);
                 if (!stmt2)
                         goto error;
-                ctxt->cur_stmt = g_steal_pointer (&stmt2);
+                ctxt->cur_stmt = stmt2;
+                stmt2 = NULL;
                 stmt = NULL;
         } else {
                 stmt2 = cr_statement_append (ctxt->stylesheet->statements,
                                              stmt);
                 if (!stmt2)
                         goto error;
-                ctxt->stylesheet->statements = g_steal_pointer (&stmt2);
+                ctxt->stylesheet->statements = stmt2;
+                stmt2 = NULL;
                 stmt = NULL;
         }
 
@@ -721,7 +727,10 @@ property (CRDocHandler * a_this,
         return;
 
       error:
-        g_clear_pointer (&str, g_free);
+        if (str) {
+                g_free (str);
+                str = NULL;
+        }
 
         if (decl) {
                 cr_declaration_destroy (decl);
@@ -1126,5 +1135,8 @@ cr_om_parser_destroy (CROMParser * a_this)
                 PRIVATE (a_this) = NULL;
         }
 
-        g_clear_pointer (&a_this, g_free);
+        if (a_this) {
+                g_free (a_this);
+                a_this = NULL;
+        }
 }

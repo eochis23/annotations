@@ -104,7 +104,7 @@ shell_agent_request_free (gpointer data)
 static void
 shell_agent_request_cancel (ShellAgentRequest *request)
 {
-  GError *error = NULL;
+  GError *error;
   ShellNetworkAgent *self;
 
   self = request->self;
@@ -132,7 +132,7 @@ static void
 shell_network_agent_finalize (GObject *object)
 {
   ShellNetworkAgent *self = SHELL_NETWORK_AGENT (object);
-  GError *error = NULL;
+  GError *error;
   GHashTableIter iter;
   gpointer key;
   gpointer value;
@@ -919,7 +919,7 @@ shell_network_agent_class_init (ShellNetworkAgentClass *klass)
   props[PROP_FORCE_ALWAYS_ASK] =
      g_param_spec_boolean ("force-always-ask", NULL, NULL,
                            FALSE,
-                           G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY | G_PARAM_STATIC_NAME);
+                           G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY);
 
   g_object_class_install_properties (gobject_class, N_PROPS, props);
 

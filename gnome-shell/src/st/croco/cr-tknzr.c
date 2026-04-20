@@ -756,7 +756,8 @@ cr_tknzr_parse_string (CRTknzr * a_this, CRString ** a_str)
 
         if (status == CR_OK) {
                 if (*a_str == NULL) {
-                        *a_str = g_steal_pointer (&str);
+                        *a_str = str;
+                        str = NULL;
                 } else {
                         (*a_str)->stryng = g_string_append_len
                                 ((*a_str)->stryng,
@@ -1206,7 +1207,8 @@ cr_tknzr_parse_uri (CRTknzr * a_this,
                 }
                 if (str) {                        
                         if (*a_str == NULL) {
-                                *a_str = g_steal_pointer (&str);
+                                *a_str = str;
+                                str = NULL;
                         } else {
                                 g_string_append_len
                                         ((*a_str)->stryng,
@@ -1608,7 +1610,10 @@ cr_tknzr_new (CRInput * a_input)
         if (result->priv == NULL) {
                 cr_utils_trace_info ("Out of memory");
 
-                g_clear_pointer (&result, g_free);
+                if (result) {
+                        g_free (result);
+                        result = NULL;
+                }
 
                 return NULL;
         }
@@ -1980,7 +1985,8 @@ cr_tknzr_get_next_token (CRTknzr * a_this, CRToken ** a_tk)
                               CR_BAD_PARAM_ERROR);
 
         if (PRIVATE (a_this)->token_cache) {
-                *a_tk = g_steal_pointer (&PRIVATE (a_this)->token_cache);
+                *a_tk = PRIVATE (a_this)->token_cache;
+                PRIVATE (a_this)->token_cache = NULL;
                 return CR_OK;
         }
 
@@ -2680,7 +2686,8 @@ cr_tknzr_parse_token (CRTknzr * a_this, enum CRTokenType a_type,
                 case TIME_TK:
                 case FREQ_TK:
                         if (token->extra_type == a_et) {
-                                *((CRNum **) a_res) = g_steal_pointer (&token->u.num);
+                                *((CRNum **) a_res) = token->u.num;
+                                token->u.num = NULL;
                                 status = CR_OK;
                         }
                         break;
