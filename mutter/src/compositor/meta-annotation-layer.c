@@ -4,6 +4,7 @@
 
 #include "compositor/meta-annotation-layer.h"
 
+#include "core/meta-annotation-input.h"
 #include "backends/meta-backend-private.h"
 #include "clutter/clutter-mutter.h"
 #include "clutter/clutter-texture-content.h"
@@ -229,6 +230,8 @@ meta_annotation_layer_new (MetaBackend *backend)
   clutter_actor_show (layer->actor);
   /* Parented by gnome-shell above uiGroup so drawing stays over shell chrome. */
 
+  meta_annotation_input_set_non_mouse_pointer_isolated (layer->active);
+
   return layer;
 }
 
@@ -239,6 +242,8 @@ meta_annotation_layer_destroy (MetaAnnotationLayer *layer)
 
   if (!layer)
     return;
+
+  meta_annotation_input_set_non_mouse_pointer_isolated (FALSE);
 
   /* #region agent log */
   annotation_agent_log ("H_destroy", "meta-annotation-layer.c:destroy",
@@ -279,6 +284,7 @@ meta_annotation_layer_set_active (MetaAnnotationLayer *layer,
 {
   g_return_if_fail (layer != NULL);
   layer->active = active;
+  meta_annotation_input_set_non_mouse_pointer_isolated (active);
   if (layer->actor)
     {
       if (active)

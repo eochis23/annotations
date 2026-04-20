@@ -44,6 +44,7 @@
 #include "backends/native/meta-virtual-input-device-native.h"
 #include "clutter/clutter-mutter.h"
 #include "core/bell.h"
+#include "core/meta-annotation-input.h"
 
 #include "meta-private-enum-types.h"
 
@@ -860,13 +861,21 @@ update_device_coords_in_impl (MetaSeatImpl       *seat_impl,
                               graphene_point_t    coords)
 {
   MetaSeatImplPrivate *priv = meta_seat_impl_get_instance_private (seat_impl);
+  MetaInputDeviceNative *device_native;
+  ClutterInputDeviceTool *tool;
 
   g_rw_lock_writer_lock (&seat_impl->state_lock);
 
   if (clutter_input_device_get_device_type (input_device) == CLUTTER_TABLET_DEVICE)
     meta_seat_impl_update_stylus_state (seat_impl, input_device, coords);
   else
-    priv->pointer_state = coords;
+    {
+      device_native = META_INPUT_DEVICE_NATIVE (input_device);
+      tool = device_native->last_tool;
+
+      if (!meta_annotation_input_skip_master_pointer_update (input_device, tool))
+        priv->pointer_state = coords;
+    }
 
   g_rw_lock_writer_unlock (&seat_impl->state_lock);
 }
