@@ -85,7 +85,10 @@ export default class AnnotationExtension extends Extension {
         this._dock.raise_top();
 
         this._positionDock = () => {
-            const {x, y, width, height} = Main.layoutManager.primaryMonitor;
+            const mon = Main.layoutManager.primaryMonitor;
+            if (!mon || mon.width < 1 || mon.height < 1)
+                return;
+            const {x, y, width, height} = mon;
             this._dock.set_position(
                 Math.round(x + (width - this._dock.width) / 2),
                 Math.round(y + height - this._dock.height - 24));

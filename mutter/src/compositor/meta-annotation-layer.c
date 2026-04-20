@@ -94,11 +94,8 @@ sync_texture_from_surface (MetaAnnotationLayer *layer)
     annotation_agent_log ("H_texture", "meta-annotation-layer.c:sync",
                           "cairo_vs_cogl", cw, ch, tw, th);
     if (cw != tw || ch != th)
-      {
-        annotation_agent_log ("H_texture", "meta-annotation-layer.c:sync",
-                              "size_mismatch_skip_upload", cw, ch, tw, th);
-        return;
-      }
+      annotation_agent_log ("H_texture", "meta-annotation-layer.c:sync",
+                            "size_mismatch_warn_still_upload", cw, ch, tw, th);
   }
   /* #endregion */
 
@@ -175,8 +172,8 @@ recreate_buffers (MetaAnnotationLayer *layer,
     clutter_actor_set_content (layer->actor, local_content);
   }
 
-  sync_texture_from_surface (layer);
   clutter_actor_set_size (layer->actor, width, height);
+  sync_texture_from_surface (layer);
 }
 
 static void
