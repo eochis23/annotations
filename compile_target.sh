@@ -161,6 +161,8 @@ ninja -C build
 ninja -C build install
 "
 
+bash "$SCRIPT_DIR/scripts/verify-mutter-install.sh" "$MOUNT_POINT"
+
 if [[ "$BUILD_TARGETS" == *shell* ]]; then
 	echo "--- Configuring & building GNOME Shell in chroot ---"
 	sudo arch-chroot "$MOUNT_POINT" /bin/bash -lc "

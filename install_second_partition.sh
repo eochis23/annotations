@@ -148,6 +148,8 @@ if [[ "${BUILD_TARGETS:-mutter}" == *shell* ]]; then
 fi
 CHROOT_BUILD
 
+bash "$SCRIPT_DIR/scripts/verify-mutter-install.sh" "$MOUNT_POINT"
+
 echo "--- Updating target caches (chroot) ---"
 sudo arch-chroot "$MOUNT_POINT" /bin/bash -lc 'ldconfig; glib-compile-schemas /usr/share/glib-2.0/schemas/ 2>/dev/null || true'
 

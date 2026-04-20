@@ -165,19 +165,53 @@ fi
 	fi
 	echo
 
-	echo "---------- H4: journal on target (previous boot errors) ----------"
+	echo "---------- H4: journal on target (offline; use host journalctl -D) ----------"
 	JDIR="${MOUNT_POINT}/var/log/journal"
 	if [[ -n "${MOUNT_POINT:-}" && -d "$JDIR" ]]; then
 		ls -la "$JDIR" 2>/dev/null | head -20 || true
 		if command -v journalctl >/dev/null 2>&1; then
+			echo "--- boots recorded on this disk (newest last) ---"
+			journalctl -D "$JDIR" --list-boots --no-pager 2>/dev/null | tail -15 || true
+			echo "--- newest boot (-b 0): err priority, tail ---"
+			journalctl -D "$JDIR" -b 0 -p err --no-pager 2>/dev/null | tail -120 || true
+			echo "--- newest boot (-b 0): gdm.service ---"
+			journalctl -D "$JDIR" -b 0 -u gdm.service --no-pager 2>/dev/null | tail -100 || true
+			echo "--- newest boot (-b 0): gnome-shell|mutter|gjs|segfault|fatal|error ---"
+			journalctl -D "$JDIR" -b 0 --no-pager 2>/dev/null | grep -iE 'gnome-shell|mutter|gjs|segfault|fatal|error' | tail -80 || true
+			echo "--- previous boot (-b -1): err priority, tail ---"
 			journalctl -D "$JDIR" -b -1 -p err --no-pager 2>/dev/null | tail -120 || true
-			log_ndjson "H4" "journalctl -D excerpt attempted" "{\"journal_dir\":\"var/log/journal\"}"
+			echo "--- previous boot (-b -1): gdm.service ---"
+			journalctl -D "$JDIR" -b -1 -u gdm.service --no-pager 2>/dev/null | tail -100 || true
+			echo "--- previous boot (-b -1): gnome-shell|mutter|... ---"
+			journalctl -D "$JDIR" -b -1 --no-pager 2>/dev/null | grep -iE 'gnome-shell|mutter|gjs|segfault|fatal|error' | tail -80 || true
+			log_ndjson "H4" "journalctl -D excerpts (boot 0 and -1)" "{\"journal_dir\":\"var/log/journal\"}"
 		else
 			log_ndjson "H4" "no journalctl" "{}"
 		fi
+		echo
+		echo ">>> Manual: idx 0 = newest boot on this disk; -1 = one before. Use -b 0 for the last bad session."
+		echo ">>>   sudo journalctl -D \"$JDIR\" --list-boots --no-pager"
+		echo ">>>   sudo journalctl -D \"$JDIR\" -b 0 -u gdm.service --no-pager | tail -100"
+		echo ">>>   sudo journalctl -D \"$JDIR\" -b 0 --no-pager | grep -iE 'gnome-shell|mutter|gjs|segfault|fatal|error' | tail -80"
 	else
-		echo "no $JDIR"
+		echo "no $JDIR (enable persistent journal on that install: /etc/systemd/journald.conf Storage=persistent)"
 		log_ndjson "H4" "target journal dir missing" "{}"
+	fi
+	echo
+
+	echo "---------- H5a: zero-byte mutter libs (causes gnome-shell: file too short) ----------"
+	if [[ -n "${MOUNT_POINT:-}" ]]; then
+		zb=$(find "${MOUNT_POINT}/usr/lib" -type f -path '*/mutter-*/libmutter*.so*' -size 0 2>/dev/null | head -20 || true)
+		if [[ -n "$zb" ]]; then
+			echo "FOUND empty mutter libraries:"
+			echo "$zb"
+			log_ndjson "H5a" "zero-byte mutter so found" "{}"
+		else
+			echo "No zero-byte libmutter*.so under mutter-* (good)."
+			log_ndjson "H5a" "no zero-byte mutter libs" "{}"
+		fi
+	else
+		echo "skipped (no MOUNT_POINT)"
 	fi
 	echo
 
