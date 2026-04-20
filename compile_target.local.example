@@ -36,9 +36,13 @@ CHROOT_REPO_DIR="/mnt/build/annotations"
 # If HEAD is detached on the host, set an explicit branch name for push + chroot sync:
 # OVERRIDE_BRANCH=main
 
-# Optional shallow first clone (empty = full clone):
-# GIT_CLONE_DEPTH=1
+# install_second_partition.sh: when this project is not a git checkout on the host, set:
+# INSTALL_GIT_REMOTE="https://github.com/you/annotations.git"
+# INSTALL_BRANCH="mutter_exploration"
 
-# For git@... remotes, bind-mount host SSH keys so `git fetch` works in chroot:
+# Optional: force the URL used for chroot fetch (overrides SSH→HTTPS conversion):
+# CHROOT_FETCH_URL="https://github.com/you/annotations.git"
+
+# For git@... remotes without CHROOT_FETCH_URL, bind-mount host SSH keys (optional):
 # SSH_BIND=1
 # HOST_SSH_DIR="/home/you/.ssh"

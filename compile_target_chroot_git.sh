@@ -10,14 +10,14 @@ set -euo pipefail
 # Prerequisites / caveats:
 # - Run from a checkout of the repo (mutter/ and gnome-shell/ live under the repo root).
 # - Target root must be writable and large enough for clone + build artifacts.
-# - Network works in chroot like the host; for SSH remotes, set SSH_BIND=1 and bind-mount
-#   host keys (see compile_target.local.example) so git fetch inside chroot can authenticate.
+# - Clone/fetch inside the chroot uses HTTPS by default (SSH origin URLs are rewritten).
+#   Override with CHROOT_FETCH_URL in compile_target.local.sh, or SSH_BIND=1 for host keys.
 # - Detached HEAD is refused unless you set OVERRIDE_BRANCH in compile_target.local.sh.
 # - Push runs on the host before any mount/chroot; if push fails, the script exits and does
 #   not touch the target partition.
 # - If the working tree is dirty, you must pass --commit -m "message" (no silent git add).
-# - GIT_REMOTE_NAME (default origin) must exist on the host; its URL is what the chroot uses
-#   for fetch (remote inside the clone is always named origin).
+# - GIT_REMOTE_NAME (default origin) must exist on the host for push; chroot sync uses
+#   install.sh with an HTTPS fetch URL (see scripts/annotations-git-url.sh).
 
 # ==========================================
 # 1. Arguments & configuration
@@ -25,6 +25,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOCAL_CONFIG="$SCRIPT_DIR/compile_target.local.sh"
 LIST_MUTTER_MAKEDEPENDS="$SCRIPT_DIR/scripts/list-mutter-makedepends.sh"
+ANNOTATIONS_GIT_URL_HELPER="$SCRIPT_DIR/scripts/annotations-git-url.sh"
 
 DO_COMMIT=0
 COMMIT_MSG=""
@@ -53,6 +54,8 @@ if [ ! -f "$LOCAL_CONFIG" ]; then
 fi
 # shellcheck source=compile_target.local.example
 . "$LOCAL_CONFIG"
+# shellcheck source=scripts/annotations-git-url.sh
+. "$ANNOTATIONS_GIT_URL_HELPER"
 
 : "${MOUNT_POINT:?Set MOUNT_POINT in compile_target.local.sh}"
 : "${CHROOT_REPO_DIR:?Set CHROOT_REPO_DIR in compile_target.local.sh (path inside chroot, e.g. /mnt/build/annotations)}"
@@ -130,6 +133,7 @@ if ! git remote get-url "$GIT_REMOTE_NAME" >/dev/null 2>&1; then
 	exit 1
 fi
 GIT_REMOTE_URL="$(git remote get-url "$GIT_REMOTE_NAME")"
+GIT_FETCH_URL="$(annotations_https_fetch_url "$GIT_REMOTE_URL")"
 
 if [[ -n "$(git status --porcelain 2>/dev/null)" ]]; then
 	if [[ "$DO_COMMIT" -ne 1 || -z "$COMMIT_MSG" ]]; then
@@ -195,6 +199,9 @@ echo "--- Preparing chroot build dir ---"
 sudo mkdir -p "$MOUNT_POINT/mnt/build"
 sudo cp "$LIST_MUTTER_MAKEDEPENDS" "$MOUNT_POINT/mnt/build/list-mutter-makedepends.sh"
 sudo chmod +x "$MOUNT_POINT/mnt/build/list-mutter-makedepends.sh"
+sudo cp "$SCRIPT_DIR/install.sh" "$MOUNT_POINT/mnt/build/annotations-install.sh"
+sudo cp "$ANNOTATIONS_GIT_URL_HELPER" "$MOUNT_POINT/mnt/build/annotations-git-url.sh"
+sudo chmod +x "$MOUNT_POINT/mnt/build/annotations-install.sh"
 
 if [[ -f /etc/resolv.conf ]]; then
 	sudo cp /etc/resolv.conf "$MOUNT_POINT/etc/resolv.conf" 2>/dev/null || true
@@ -216,51 +223,19 @@ CHROOT_PKGS
 # 4. Chroot: clone or update repo, build
 # ==========================================
 echo "--- Syncing repository inside chroot ($CHROOT_REPO_DIR, branch $BRANCH) ---"
-sudo arch-chroot "$MOUNT_POINT" \
-	env \
-	CHROOT_REPO_DIR="$CHROOT_REPO_DIR" \
-	BRANCH="$BRANCH" \
-	GIT_REMOTE_URL="$GIT_REMOTE_URL" \
-	GIT_CLONE_DEPTH="${GIT_CLONE_DEPTH:-}" \
-	BUILD_TARGETS="$BUILD_TARGETS" \
-	/bin/bash <<'CHROOT_GIT'
-set -euo pipefail
-repo_dir="${CHROOT_REPO_DIR:?}"
-branch="${BRANCH:?}"
-url="${GIT_REMOTE_URL:?}"
-depth="${GIT_CLONE_DEPTH:-}"
+sudo arch-chroot "$MOUNT_POINT" /usr/bin/env GIT_TERMINAL_PROMPT=0 /bin/bash /mnt/build/annotations-install.sh \
+	--destination "$CHROOT_REPO_DIR" \
+	--remote "$GIT_FETCH_URL" \
+	--branch "$BRANCH"
 
-if [[ ! -d "$repo_dir/.git" ]]; then
-	mkdir -p "$(dirname "$repo_dir")"
-	if [[ -n "$depth" ]]; then
-		git clone --depth "$depth" --branch "$branch" "$url" "$repo_dir"
-	else
-		git clone "$url" "$repo_dir"
-		cd "$repo_dir"
-		git checkout "$branch"
-	fi
-else
-	cd "$repo_dir"
-	if git remote get-url origin >/dev/null 2>&1; then
-		git remote set-url origin "$url"
-	else
-		git remote add origin "$url"
-	fi
-	git fetch origin
-	git checkout "$branch"
-	git reset --hard "origin/$branch"
-fi
-
-cd "$repo_dir"
-if [[ ! -f mutter/meson.build ]]; then
-	echo "Error: mutter/meson.build missing after sync."
+if [[ ! -f "$MOUNT_POINT/${CHROOT_REPO_DIR#/}/mutter/meson.build" ]]; then
+	echo "Error: mutter/meson.build missing under $CHROOT_REPO_DIR after sync."
 	exit 1
 fi
-if [[ "${BUILD_TARGETS:-mutter}" == *shell* ]] && [[ ! -f gnome-shell/meson.build ]]; then
-	echo "Error: gnome-shell/meson.build missing after sync."
+if [[ "$BUILD_TARGETS" == *shell* ]] && [[ ! -f "$MOUNT_POINT/${CHROOT_REPO_DIR#/}/gnome-shell/meson.build" ]]; then
+	echo "Error: gnome-shell/meson.build missing under $CHROOT_REPO_DIR after sync."
 	exit 1
 fi
-CHROOT_GIT
 
 sudo arch-chroot "$MOUNT_POINT" \
 	env BUILD_TARGETS="$BUILD_TARGETS" CHROOT_REPO_DIR="$CHROOT_REPO_DIR" \
