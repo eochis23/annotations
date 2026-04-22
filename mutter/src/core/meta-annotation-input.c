@@ -398,6 +398,34 @@ meta_annotation_input_skip_pointer_motion_coalesced (ClutterInputDevice     *dev
                                                       float                   pointer_pos_x,
                                                       float                   pointer_pos_y)
 {
+  /* #region agent log */
+  {
+    static guint skip_pm_entry_counter = 0;
+
+    if ((++skip_pm_entry_counter % 40) == 1)
+      {
+        ClutterInputDeviceType dt = device
+          ? clutter_input_device_get_device_type (device)
+          : (ClutterInputDeviceType) -1;
+        ClutterInputCapabilities caps = device
+          ? clutter_input_device_get_capabilities (device)
+          : 0;
+        int tool_type = tool
+          ? (int) clutter_input_device_tool_get_tool_type (tool)
+          : -1;
+        int isolated = g_atomic_int_get (&annotation_non_mouse_isolated) ? 1 : 0;
+        double pressure = (motion_axes &&
+                           (int) CLUTTER_INPUT_AXIS_PRESSURE > 0)
+          ? motion_axes[CLUTTER_INPUT_AXIS_PRESSURE] : -1.0;
+
+        g_message ("annotation-input: da8410 H_devtype skip_pm_entry "
+                   "dtype=%d caps=0x%x tool=%d isolated=%d pressure=%.3f group=%lld",
+                   (int) dt, (unsigned) caps, tool_type, isolated,
+                   pressure, (long long) libinput_device_group);
+      }
+  }
+  /* #endregion */
+
   if (meta_annotation_input_skip_master_pointer_update (device, tool, motion_axes,
                                                         libinput_device_group,
                                                         pointer_pos_x,
@@ -436,12 +464,52 @@ meta_annotation_input_skip_pointer_motion_coalesced (ClutterInputDevice     *dev
     }
 
   if (!device || clutter_input_device_get_device_type (device) != CLUTTER_POINTER_DEVICE)
-    return FALSE;
+    {
+      /* #region agent log */
+      {
+        static guint skip_pm_fall_nonptr = 0;
+        if ((++skip_pm_fall_nonptr % 40) == 1)
+          g_message ("annotation-input: da8410 H_devtype skip_pm_fallthrough "
+                     "reason=not_pointer dtype=%d",
+                     device ? (int) clutter_input_device_get_device_type (device) : -1);
+      }
+      /* #endregion */
+      return FALSE;
+    }
   if (clutter_input_device_get_capabilities (device) & CLUTTER_INPUT_CAPABILITY_TOUCHPAD)
-    return FALSE;
+    {
+      /* #region agent log */
+      {
+        static guint skip_pm_fall_touchpad = 0;
+        if ((++skip_pm_fall_touchpad % 40) == 1)
+          g_message ("annotation-input: da8410 H_devtype skip_pm_fallthrough "
+                     "reason=touchpad_cap");
+      }
+      /* #endregion */
+      return FALSE;
+    }
   if (!motion_axes)
-    return FALSE;
+    {
+      /* #region agent log */
+      {
+        static guint skip_pm_fall_noaxes = 0;
+        if ((++skip_pm_fall_noaxes % 40) == 1)
+          g_message ("annotation-input: da8410 H_devtype skip_pm_fallthrough "
+                     "reason=no_motion_axes");
+      }
+      /* #endregion */
+      return FALSE;
+    }
 
+  /* #region agent log */
+  {
+    static guint skip_pm_ptr_pressure = 0;
+    if ((++skip_pm_ptr_pressure % 40) == 1)
+      g_message ("annotation-input: da8410 H_devtype skip_pm_pointer_pressure=%.3f ret=%d",
+                 motion_axes[CLUTTER_INPUT_AXIS_PRESSURE],
+                 motion_axes[CLUTTER_INPUT_AXIS_PRESSURE] > 0.0 ? 1 : 0);
+  }
+  /* #endregion */
   return motion_axes[CLUTTER_INPUT_AXIS_PRESSURE] > 0.0;
 }
 
@@ -528,6 +596,29 @@ meta_annotation_event_targets_overlay (const ClutterEvent *event)
       annotation_input_agent_log ("H_overlay_route", "pointer_overlay_decision",
                                   (int) type, (int) dtype, tool_t, overlay ? 1 : 0);
     }
+  /* #endregion */
+
+  /* #region agent log */
+  {
+    static guint overlay_route_counter = 0;
+
+    if (g_atomic_int_get (&annotation_non_mouse_isolated) &&
+        (++overlay_route_counter % 40) == 1)
+      {
+        ClutterInputCapabilities caps = device
+          ? clutter_input_device_get_capabilities (device)
+          : 0;
+        int tool_t = -1;
+        ClutterInputDeviceTool *t = clutter_event_get_device_tool (event);
+
+        if (t)
+          tool_t = (int) clutter_input_device_tool_get_tool_type (t);
+        g_message ("annotation-input: da8410 H_route targets_overlay "
+                   "type=%d dtype=%d caps=0x%x tool=%d overlay=%d",
+                   (int) type, (int) dtype, (unsigned) caps, tool_t,
+                   overlay ? 1 : 0);
+      }
+  }
   /* #endregion */
 
   return overlay;

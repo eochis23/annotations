@@ -2545,6 +2545,16 @@ process_device_event (MetaSeatImpl          *seat_impl,
           libinput_event_get_pointer_event (event);
         device = libinput_device_get_user_data (libinput_device);
 
+        /* #region agent log */
+        {
+          static guint ptr_abs_counter = 0;
+          if ((++ptr_abs_counter % 40) == 1)
+            g_message ("annotation-seat: da8410 H_touchpath pointer_motion_absolute "
+                       "dtype=%d",
+                       (int) clutter_input_device_get_device_type (device));
+        }
+        /* #endregion */
+
         meta_viewport_info_get_extents (seat_impl->viewports,
                                         &stage_width, &stage_height);
 
@@ -2674,6 +2684,16 @@ process_device_event (MetaSeatImpl          *seat_impl,
           libinput_event_get_touch_event (event);
 
         device = libinput_device_get_user_data (libinput_device);
+
+        /* #region agent log */
+        {
+          static guint touch_motion_counter = 0;
+          if ((++touch_motion_counter % 40) == 1)
+            g_message ("annotation-seat: da8410 H_touchpath touch_motion "
+                       "dtype=%d",
+                       (int) clutter_input_device_get_device_type (device));
+        }
+        /* #endregion */
 
         meta_viewport_info_get_extents (seat_impl->viewports,
                                         &stage_width, &stage_height);
@@ -2822,6 +2842,13 @@ process_device_event (MetaSeatImpl          *seat_impl,
       }
     case LIBINPUT_EVENT_TABLET_TOOL_AXIS:
       {
+        /* #region agent log */
+        {
+          static guint tablet_axis_counter = 0;
+          if ((++tablet_axis_counter % 40) == 1)
+            g_message ("annotation-seat: da8410 H_touchpath tablet_tool_axis event");
+        }
+        /* #endregion */
         process_tablet_axis (seat_impl, event);
         break;
       }
