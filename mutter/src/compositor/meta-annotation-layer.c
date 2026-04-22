@@ -64,17 +64,26 @@ sync_texture_from_surface (MetaAnnotationLayer *layer)
 {
   int stride;
   guchar *data;
+  CoglTexture *tex;
 
-  if (!layer->surface || !get_cogl_texture (layer))
+  if (!layer->surface)
     return;
+
+  tex = get_cogl_texture (layer);
+  if (!tex || !COGL_IS_TEXTURE (tex))
+    return;
+
+  /* Re-entrancy (e.g. stage notify → recreate_buffers) can replace actor content and
+   * free the CoglTexture between calls; keep a ref for the whole upload (coredump:
+   * SIGSEGV in COGL_IS_TEXTURE / cogl_texture_get_width from sync_texture_from_surface). */
+  g_object_ref (tex);
 
   /* #region agent log */
   {
-    CoglTexture *tex = get_cogl_texture (layer);
     int cw = cairo_image_surface_get_width (layer->surface);
     int ch = cairo_image_surface_get_height (layer->surface);
-    int tw = cogl_texture_get_width (tex);
-    int th = cogl_texture_get_height (tex);
+    int tw = (int) cogl_texture_get_width (tex);
+    int th = (int) cogl_texture_get_height (tex);
 
     annotation_agent_log ("H_texture", "meta-annotation-layer.c:sync",
                           "cairo_vs_cogl", cw, ch, tw, th);
@@ -87,7 +96,7 @@ sync_texture_from_surface (MetaAnnotationLayer *layer)
   stride = cairo_image_surface_get_stride (layer->surface);
   data = cairo_image_surface_get_data (layer->surface);
 
-  if (!cogl_texture_set_data (get_cogl_texture (layer),
+  if (!cogl_texture_set_data (tex,
                               COGL_PIXEL_FORMAT_CAIRO_ARGB32_COMPAT,
                               stride,
                               data,
@@ -104,6 +113,8 @@ sync_texture_from_surface (MetaAnnotationLayer *layer)
     if (layer->actor)
       clutter_actor_queue_redraw (layer->actor);
   }
+
+  g_object_unref (tex);
 }
 
 static void

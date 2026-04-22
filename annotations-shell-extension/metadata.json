@@ -2,7 +2,7 @@
   "uuid": "annotation@annotations.local",
   "name": "Annotations",
   "description": "Dock for compositor annotation colors and clear-all (Mutter org.gnome.Mutter.Annotation).",
-  "version": 2,
+  "version": 3,
   "shell-version": ["47", "48", "49", "50"],
   "session-modes": ["user"]
 }

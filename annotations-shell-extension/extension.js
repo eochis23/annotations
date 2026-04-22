@@ -24,6 +24,15 @@ const COLORS = [
     {r: 0.15, g: 0.15, b: 0.15, a: 1.0},
 ];
 
+const COLOR_LABELS = [
+    'Red pen',
+    'Blue pen',
+    'Green pen',
+    'Yellow pen',
+    'White pen',
+    'Black pen',
+];
+
 function dbusCall(methodName, parameters, replyHandler) {
     Gio.DBus.session.call(
         BUS,
@@ -117,6 +126,9 @@ export default class AnnotationExtension extends Extension {
         this._setActiveRetryId = 0;
         this._setActiveRetryCount = 0;
         this._annotationSessionActiveOk = false;
+        this._allocDebounceId = 0;
+        this._overviewShowingId = 0;
+        this._overviewHiddenId = 0;
 
         this._dock = new St.BoxLayout({
             style_class: 'annotation-dock',
@@ -124,10 +136,11 @@ export default class AnnotationExtension extends Extension {
             reactive: true,
         });
 
-        for (const c of COLORS) {
+        COLORS.forEach((c, i) => {
             const btn = new St.Button({
                 style_class: 'annotation-color-button',
                 can_focus: true,
+                accessible_name: COLOR_LABELS[i] ?? `Annotation color ${i + 1}`,
             });
             btn.set_style(`background-color: rgba(${Math.round(c.r * 255)}, ${Math.round(c.g * 255)}, ${Math.round(c.b * 255)}, ${c.a});`);
             btn.connect('clicked', () => {
@@ -138,11 +151,16 @@ export default class AnnotationExtension extends Extension {
                 });
             });
             this._dock.add_child(btn);
-        }
+        });
+
+        const separator = new St.Widget({
+            style_class: 'annotation-dock-separator',
+        });
 
         const trash = new St.Button({
             style_class: 'annotation-trash-button',
             can_focus: true,
+            accessible_name: 'Clear all annotations',
             child: new St.Icon({
                 icon_name: 'user-trash-symbolic',
                 style_class: 'system-status-icon',
@@ -154,11 +172,15 @@ export default class AnnotationExtension extends Extension {
                     console.warn(`Annotation Clear: ${err.message}`);
             });
         });
+        this._dock.add_child(separator);
         this._dock.add_child(trash);
 
         Main.uiGroup.add_child(this._dock);
         /* raise_top() is not always exposed on St actors in GJS; Shell uses this pattern. */
         Main.uiGroup.set_child_above_sibling(this._dock, null);
+
+        if (Main.overview.visible)
+            this._dock.hide();
 
         this._positionDock = () => {
             if (!this._dock)
@@ -179,6 +201,23 @@ export default class AnnotationExtension extends Extension {
         });
 
         this._allocId = this._dock.connect('notify::allocation', () => {
+            this._allocDebounceId = removeSource(this._allocDebounceId);
+            this._allocDebounceId = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+                this._allocDebounceId = 0;
+                this._positionDock();
+                return GLib.SOURCE_REMOVE;
+            });
+        });
+
+        this._overviewShowingId = Main.overview.connect('showing', () => {
+            if (this._dock)
+                this._dock.hide();
+        });
+        this._overviewHiddenId = Main.overview.connect('hidden', () => {
+            if (!this._dock)
+                return;
+            this._dock.show();
+            Main.uiGroup.set_child_above_sibling(this._dock, null);
             this._positionDock();
         });
 
@@ -209,6 +248,15 @@ export default class AnnotationExtension extends Extension {
     }
 
     disable() {
+        if (this._overviewShowingId) {
+            Main.overview.disconnect(this._overviewShowingId);
+            this._overviewShowingId = 0;
+        }
+        if (this._overviewHiddenId) {
+            Main.overview.disconnect(this._overviewHiddenId);
+            this._overviewHiddenId = 0;
+        }
+
         if (this._annotationBusWatchId) {
             Gio.bus_unwatch_name(this._annotationBusWatchId);
             this._annotationBusWatchId = 0;
@@ -219,6 +267,7 @@ export default class AnnotationExtension extends Extension {
 
         this._idlePos = removeSource(this._idlePos);
         this._dockPositionTimeout = removeSource(this._dockPositionTimeout);
+        this._allocDebounceId = removeSource(this._allocDebounceId);
 
         if (this._monitorsId) {
             Main.layoutManager.disconnect(this._monitorsId);
