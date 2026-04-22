@@ -128,6 +128,10 @@ meta_annotation_input_set_non_mouse_pointer_isolated (gboolean isolated)
       annotation_tablet_xy_valid = FALSE;
       g_mutex_unlock (&annotation_tablet_group_mutex);
     }
+  /* #region agent log */
+  g_message ("annotation-input: da8410 hypA set_non_mouse_pointer_isolated=%d",
+             isolated ? 1 : 0);
+  /* #endregion */
 }
 
 void
