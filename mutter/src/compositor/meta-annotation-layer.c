@@ -447,6 +447,18 @@ meta_annotation_layer_handle_event (MetaAnnotationLayer *layer,
         gboolean pressure_tip = motion_has_tablet_pressure (event);
         gboolean btn = pointer_has_draw_button (event);
 
+        /* #region agent log */
+        {
+          static guint motion_counter = 0;
+          if ((++motion_counter % 40) == 1)
+            g_message ("annotation-layer: da8410 H_draw motion "
+                       "stroke=%d btn=%d pressure_tip=%d surface=%p",
+                       layer->stroke_active ? 1 : 0,
+                       btn ? 1 : 0, pressure_tip ? 1 : 0,
+                       (void *) layer->surface);
+        }
+        /* #endregion */
+
         if (!layer->stroke_active && !btn && !pressure_tip)
           return TRUE;
 
@@ -461,6 +473,15 @@ meta_annotation_layer_handle_event (MetaAnnotationLayer *layer,
 
         if (layer->stroke_active)
           {
+            /* #region agent log */
+            {
+              static guint segdraw_counter = 0;
+              if ((++segdraw_counter % 40) == 1)
+                g_message ("annotation-layer: da8410 H_draw segment "
+                           "from=(%.0f,%.0f) to=(%.0f,%.0f)",
+                           layer->last_x, layer->last_y, pos.x, pos.y);
+            }
+            /* #endregion */
             draw_segment (layer, layer->last_x, layer->last_y, pos.x, pos.y);
             layer->last_x = pos.x;
             layer->last_y = pos.y;

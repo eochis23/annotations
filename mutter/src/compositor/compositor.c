@@ -1825,6 +1825,20 @@ meta_compositor_route_annotation_event (MetaCompositor    *compositor,
   }
   overlay = meta_annotation_event_targets_overlay (event);
 
+  /* #region agent log */
+  {
+    static guint route_entry_counter = 0;
+    if (et == CLUTTER_MOTION && (++route_entry_counter % 40) == 1)
+      g_message ("annotation-route: da8410 H_dispatch entry "
+                 "et=%d dtype=%d overlay=%d has_layer=%d active=%d",
+                 (int) et, dtype, overlay ? 1 : 0,
+                 priv->annotation_layer ? 1 : 0,
+                 (priv->annotation_layer &&
+                  meta_annotation_layer_get_active (priv->annotation_layer))
+                 ? 1 : 0);
+  }
+  /* #endregion */
+
   if (!priv->annotation_layer)
     {
       /* #region agent log */
@@ -1859,6 +1873,16 @@ meta_compositor_route_annotation_event (MetaCompositor    *compositor,
     }
 
   handled = meta_annotation_layer_handle_event (priv->annotation_layer, event);
+
+  /* #region agent log */
+  {
+    static guint route_handled_counter = 0;
+    if (et == CLUTTER_MOTION && (++route_handled_counter % 40) == 1)
+      g_message ("annotation-route: da8410 H_dispatch handled "
+                 "et=%d dtype=%d handled=%d",
+                 (int) et, dtype, handled ? 1 : 0);
+  }
+  /* #endregion */
 
   /* #region agent log */
   if (et == CLUTTER_TOUCH_BEGIN || et == CLUTTER_TOUCH_UPDATE ||
