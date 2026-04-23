@@ -547,7 +547,6 @@ class KateWindowTracker {
     handleBoundsChangedSource(source) {
         if (!source || !this.editor) return false;
         if (safePid(source) !== this.pid) return false;
-        if (source !== this.editor) return false;
 
         /* Editor's on-screen footprint moved within its top-level
          * (tool view opened, tab bar toggled, etc). Republish the
@@ -556,8 +555,26 @@ class KateWindowTracker {
          * charBaseYRel is editor-relative so a pure editor relocation
          * doesn't invalidate it. Re-baselining here would retroactively
          * shift every already-stored follow stroke. */
-        this.lastRegionSig = '';
-        this._republishRegion();
+        if (source === this.editor) {
+            this.lastRegionSig = '';
+            this._republishRegion();
+            return true;
+        }
+
+        /* Any other bounds-changed from Kate's pid. Kate (Qt, at-spi2-core
+         * 2.58) does NOT emit object:value-changed on its scrollbars
+         * when the user scrolls - it only emits object:bounds-changed
+         * on scrollbar thumbs, visible text runs, and other content
+         * widgets. Confirmed by session da8410 run (372 bounds-changed
+         * vs 0 value-changed from kate pids during an active scroll).
+         * So treat any Kate-pid bounds-changed as a scroll-candidate:
+         * re-capture the char0 baseline if we missed it at discovery
+         * (e.g. char 0 was off-screen), then republish scroll.
+         * _republishScroll debounces on lastScrollY, so spurious
+         * triggers cost one get_character_extents(0) query each. */
+        if (this.charBaseYRel === null)
+            this._captureBaseline();
+        this._republishScroll();
         return true;
     }
 
