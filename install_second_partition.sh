@@ -182,6 +182,9 @@ sudo arch-chroot "$MOUNT_POINT" /bin/bash -lc 'ldconfig; glib-compile-schemas /u
 echo "--- Installing annotation shell extension (chroot) ---"
 bash "$SCRIPT_DIR/scripts/install-annotation-extension-chroot.sh" "$MOUNT_POINT"
 
+echo "--- Installing Kate + AT-SPI runtime (chroot, INSTALL_KATE=${INSTALL_KATE:-1}) ---"
+INSTALL_KATE="${INSTALL_KATE:-1}" bash "$SCRIPT_DIR/scripts/install-kate-runtime-chroot.sh" "$MOUNT_POINT"
+
 echo "--- Verifying key libraries in chroot (ldd) ---"
 set +e
 if [[ "$BUILD_TARGETS" == *shell* ]] && [[ -f "$MOUNT_POINT/usr/bin/gnome-shell" ]]; then

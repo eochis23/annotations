@@ -148,8 +148,31 @@ class KateWindowTracker {
 
             const gotEverything = this.editor && this.scrollbar;
             const exhausted = ++this._retryCount >= DISCOVERY_ATTEMPT_DELAYS_MS.length;
-            if (gotEverything || exhausted)
+            if (gotEverything || exhausted) {
+                /* Single, actionable warning if we gave up without
+                 * the minimum required pieces. Pointing at the real
+                 * cause (Qt accessibility off, at-spi2-core not
+                 * running) is much more useful than silent failure;
+                 * see KATE_COMPATIBILITY.md for the full diagnosis
+                 * flow. Gated on exhaustion so a normal app startup
+                 * (which typically resolves on the first or second
+                 * retry) stays quiet. */
+                if (exhausted && !this.editor) {
+                    console.warn(
+                        `KateTrackerManager: discovery exhausted for pid ${this.pid} ` +
+                        `(wm_class='${this.wmClass}') without finding an editor accessible. ` +
+                        'Scroll-following will be inactive for this window. ' +
+                        'Likely causes: at-spi2-core is not running on the session bus, ' +
+                        'or Qt accessibility is disabled. See KATE_COMPATIBILITY.md.');
+                } else if (exhausted && this.editor && this.charBaseYRel === null) {
+                    console.warn(
+                        `KateTrackerManager: editor found for pid ${this.pid} ` +
+                        'but Text.get_character_extents(0) kept returning a degenerate ' +
+                        'rect; scroll-following may be imprecise. ' +
+                        'Open a non-empty document in this editor.');
+                }
                 return GLib.SOURCE_REMOVE;
+            }
             this._scheduleDiscovery();
             return GLib.SOURCE_REMOVE;
         });
