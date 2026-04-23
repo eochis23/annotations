@@ -193,3 +193,28 @@ Now, let's plan the rest of this project that's an annotation shell extension fo
 ##26
 
 Make a detailed file documenting all of the changes you made to mutter
+
+
+##27
+
+(On Opus 4.7, in cursor's debug mode) I'm trying to build an annotation shell extension with a modified version of mutter. The goal is for it to have anything but mouse (usb, touchpad) input interact with the computer like normal, but for everything else, they should interact with an annotation layer and dock that are always visible above the other windows. Right now, the pen I'm using is moving the mouse cursor, so please fix that
+
+##28
+
+I realized I can see a mouse cursor following the pen when I draw with it. Please have that not show. You should do this by tracing through to where the sprite is drawn and stop that directly while . Don't try and stop the cursor image from moving, just don't draw it in whatever function would normally draw it while you can verify that the pen is causing the input.
+
+##29
+
+Right now, the pen and touch can't interact with the dock. How hard would it be to make this actually happen by allowing them to click it?
+
+##30
+
+How about just knowing where the dock is and doing the things that would happen if it was clicked when non-mouse input just hits the screen in those coordinates
+
+##31
+
+what if the dock was just part of the annotation layer and the mouse couldn't interact with it?
+
+##32
+
+(On Opus 4.7) Compare and contrast the above options. Make a plan for the one that would be easier to implement
