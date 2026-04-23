@@ -222,11 +222,27 @@ class KateWindowTracker {
         try { desktop = Atspi.get_desktop(0); } catch (e) { return; }
         if (!desktop) return;
 
+        /* Kate (and some other Qt apps) register TWO accessible app
+         * entries under the same pid: an early stub with child_count=0
+         * and the real tree published slightly later. Iterating and
+         * taking the first pid match always binds us to the stub and
+         * makes discovery fail forever. Instead, scan every pid match
+         * and pick the one with the largest child_count; fall back to
+         * the first match if all are empty (next retry will check
+         * again once the real tree is published). Confirmed by desktop
+         * dump, session da8410 runId=kate-scroll: both entries
+         * (childCount:0 and childCount:1/2) share pid 5295. */
         const n = safeChildCount(desktop);
+        let bestCount = -1;
         for (let i = 0; i < n; i++) {
             const a = safeChild(desktop, i);
             if (!a) continue;
-            if (safePid(a) === this.pid) { app = a; break; }
+            if (safePid(a) !== this.pid) continue;
+            const cc = safeChildCount(a);
+            if (cc > bestCount) {
+                app = a;
+                bestCount = cc;
+            }
         }
         if (!app) return;
 
