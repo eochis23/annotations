@@ -165,8 +165,12 @@ class KateWindowTracker {
         this.baseSbVal = null;
         /* Pixel height of a single text line, measured at discovery via
          * char 0's extent height. Falls back to 14 if the accessible
-         * returns a degenerate rect (e.g. char 0 off-screen). */
+         * returns a degenerate rect (e.g. char 0 off-screen). Gets
+         * self-calibrated at runtime via the text-iface / scrollbar
+         * cross-check in _republishScroll the first time the user
+         * scrolls a small amount. */
         this.lineHeight = 14;
+        this._lineHeightCalibrated = false;
         this.lastRegionSig = '';    /* "x,y,w,h" last published, so we debounce */
         this.lastScrollY = null;
 
@@ -537,34 +541,18 @@ class KateWindowTracker {
      * which still beats nothing. */
     _republishScroll() {
         if (!this.editor) return;
-        let sy = 0;
-        let ok = false;
 
-        /* Primary signal: scrollbar Value.current_value delta * lineHeight.
-         * Runtime evidence (session da8410): Kate reports scroll position
-         * in line units via the Atspi Value interface on the scrollbar,
-         * and this value is readable at every moment regardless of
-         * whether char 0 is currently on screen. The Text-iface
-         * char0-extent approach only works for scrolls where char 0
-         * stays visible (first screen or two); beyond that Qt returns a
-         * degenerate (0,0,0,0) rect and we'd get stuck. */
-        if (this.scrollbar && this.baseSbVal !== null) {
-            try {
-                const v = this.scrollbar.get_value_iface?.();
-                if (v) {
-                    const cur = v.get_current_value();
-                    sy = Math.round((cur - this.baseSbVal) * this.lineHeight);
-                    ok = true;
-                }
-            } catch (e) { /* stale accessible; fall through to text-iface */ }
-        }
-
-        /* Fallback: char 0 text-iface delta. Only reachable when the
-         * scrollbar path above failed (e.g. no scrollbar accessible
-         * was found for this window). Same guard against Qt's zero-rect
-         * degenerate response. */
-        if (!ok && this.charBaseYRel !== null) {
-            try {
+        /* Sample both signals, then self-calibrate lineHeight on the
+         * first scroll small enough that char 0 is provably still
+         * on-screen. Runtime evidence (session da8410 H29 probe run):
+         * Kate reports scrollbar Value.current_value in LINE units (not
+         * pixels), and Qt's char-extent call reports rect.height=0 on
+         * Kate's editor - so our constructor-time lineHeight fallback
+         * of 14 is always wrong for the user's actual font, causing
+         * ink drift that accumulates with scroll distance. */
+        let textDelta = null;
+        try {
+            if (this.charBaseYRel !== null) {
                 const text = this.editor.get_text_iface?.();
                 if (text) {
                     const rect = text.get_character_extents(0, Atspi.CoordType.WINDOW);
@@ -572,14 +560,56 @@ class KateWindowTracker {
                     if (rect && ed && !(rect.x === 0 && rect.y === 0 &&
                                         rect.width === 0 && rect.height === 0)) {
                         const curRel = rect.y - ed.y;
-                        sy = this.charBaseYRel - curRel;
-                        ok = true;
+                        textDelta = this.charBaseYRel - curRel;
                     }
                 }
-            } catch (e) { /* fall through, give up */ }
+            }
+        } catch (e) { /* stale accessible; leave textDelta null */ }
+
+        let sbDelta = null;
+        try {
+            if (this.scrollbar && this.baseSbVal !== null) {
+                const v = this.scrollbar.get_value_iface?.();
+                if (v) sbDelta = v.get_current_value() - this.baseSbVal;
+            }
+        } catch (e) { /* stale accessible; leave sbDelta null */ }
+
+        /* Self-calibrate lineHeight once, on a small scroll where char
+         * 0 is still visible and textDelta is still tracking it
+         * (Qt clamps rect.y to editor top once char 0 goes off-screen,
+         * so we cap |sbDelta| at ~3 lines to ensure we haven't scrolled
+         * past the first screen yet). */
+        let calibrated = false;
+        if (!this._lineHeightCalibrated &&
+            textDelta !== null && sbDelta !== null &&
+            Math.abs(sbDelta) >= 1 && Math.abs(sbDelta) <= 3 &&
+            textDelta !== 0) {
+            const measured = Math.abs(textDelta / sbDelta);
+            if (measured >= 8 && measured <= 80) {
+                this.lineHeight = measured;
+                this._lineHeightCalibrated = true;
+                calibrated = true;
+            }
         }
 
-        if (!ok) return;
+        /* Primary: sbDelta * lineHeight. Works at any scroll distance
+         * because the scrollbar Value is always readable. Fallback to
+         * textDelta when we have no scrollbar accessible (rare;
+         * happens when a window comes up with a still-building tree).
+         * Prefer textDelta only when sbDelta is tiny AND textDelta
+         * agrees - that avoids following Qt's stale char-0 clamp when
+         * the user has scrolled past the first screen. */
+        let sy = 0;
+        let source = '';
+        if (sbDelta !== null) {
+            sy = Math.round(sbDelta * this.lineHeight);
+            source = 'sb';
+        } else if (textDelta !== null) {
+            sy = textDelta;
+            source = 'text';
+        } else {
+            return;
+        }
 
         const syRound = Math.round(sy);
         if (this.lastScrollY === syRound) return;
@@ -587,11 +617,15 @@ class KateWindowTracker {
 
         // #region agent log
         _agentDbg('KateWindowTracker._republishScroll', 'SetWindowScroll', {
-            hypothesisId: 'H4',
+            hypothesisId: 'H30',
             pid: this.pid,
             scrollY: syRound,
-            usedText: this.charBaseYRel !== null,
-            charBaseYRel: this.charBaseYRel,
+            source,
+            sbDelta,
+            textDelta,
+            lineHeight: this.lineHeight,
+            calibrated,
+            lineHeightCalibrated: !!this._lineHeightCalibrated,
         });
         // #endregion
 
