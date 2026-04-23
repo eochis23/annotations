@@ -112,6 +112,14 @@ function safePid(acc) {
     try { return acc.get_process_id(); } catch (e) { return -1; }
 }
 
+function safeName(acc) {
+    try { return acc.get_name(); } catch (e) { return null; }
+}
+
+function safeRoleName(acc) {
+    try { return acc.get_role_name(); } catch (e) { return null; }
+}
+
 /* /proc/<pid>/comm is the kernel's executable comm name (truncated to
  * 15 chars). This is present from process creation, independent of
  * whatever Wayland xdg_toplevel app_id Qt eventually sets. Meta.Window
@@ -233,6 +241,48 @@ class KateWindowTracker {
             hypothesisId: 'H3', pid: this.pid, appChildCount,
             retry: this._retryCount,
         });
+        // #endregion
+        // #region agent log
+        /* H5/H6/H7/H8: dump desktop contents + probe lazy access.
+         * Run once (retry 0) to avoid flooding. */
+        if (this._retryCount === 0) {
+            const deskChildren = [];
+            const deskN = safeChildCount(desktop);
+            for (let i = 0; i < deskN; i++) {
+                const a = safeChild(desktop, i);
+                if (!a) { deskChildren.push({i, null: true}); continue; }
+                deskChildren.push({
+                    i,
+                    pid: safePid(a),
+                    name: safeName(a),
+                    role: safeRoleName(a),
+                    childCount: safeChildCount(a),
+                });
+            }
+            /* H6: force a get_child_at_index(0) even when child_count is 0,
+             * to see if Qt's tree is just lazy. */
+            const firstChild = safeChild(app, 0);
+            const probe = firstChild ? {
+                name: safeName(firstChild),
+                role: safeRoleName(firstChild),
+                pid: safePid(firstChild),
+                childCount: safeChildCount(firstChild),
+            } : null;
+            /* H7: is there ANOTHER accessible entry that matches our pid
+             * but with a populated tree? */
+            const pidMatches = deskChildren.filter(c => c.pid === this.pid);
+            _agentDbg('KateWindowTracker._tryDiscover', 'desktop dump', {
+                hypothesisId: 'H5-H8',
+                pid: this.pid,
+                deskTotal: deskN,
+                deskChildren,
+                pidMatchCount: pidMatches.length,
+                appName: safeName(app),
+                appRole: safeRoleName(app),
+                appChildCount,
+                lazyChild0: probe,
+            });
+        }
         // #endregion
         this._walk(app, 0, false, found);
 
