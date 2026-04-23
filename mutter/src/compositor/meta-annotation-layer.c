@@ -17,11 +17,32 @@
 #include <stdio.h>
 
 /* #region agent log */
+static const char *
+dbg_log_path (void)
+{
+  /* /home is not shared across partitions, so write into the running
+   * session's own $HOME. After reboot the host mounts the second-partition
+   * root and reads from <MOUNT_POINT>/home/<user>/mutter-annot-debug-da8410.log. */
+  static char path[512];
+  static gboolean initialized;
+
+  if (!initialized)
+    {
+      const char *home = g_get_home_dir ();
+      if (home && *home)
+        g_snprintf (path, sizeof path, "%s/mutter-annot-debug-da8410.log", home);
+      else
+        g_strlcpy (path, "/tmp/mutter-annot-debug-da8410.log", sizeof path);
+      initialized = TRUE;
+    }
+  return path;
+}
+
 static void
 dbg_log (const char *location, const char *hypothesis, const char *msg_json,
          const char *data_json)
 {
-  FILE *f = fopen ("/home/eochis/Projects/annotations/.cursor/debug-da8410.log", "a");
+  FILE *f = fopen (dbg_log_path (), "a");
   if (!f)
     return;
   fprintf (f,

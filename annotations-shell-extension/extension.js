@@ -68,6 +68,29 @@ function removeSource(id) {
     return 0;
 }
 
+// #region agent log
+/* /home is not shared across partitions; write to $HOME on whichever
+ * partition is actually running the session so the log is retrievable. */
+const _DBG_PATH = `${GLib.get_home_dir()}/mutter-annot-debug-da8410.log`;
+const _DBG_ENC = new TextEncoder();
+function dbgLog(hypothesisId, location, message, data) {
+    try {
+        const line = `${JSON.stringify({
+            sessionId: 'da8410',
+            hypothesisId,
+            location,
+            message,
+            data,
+            timestamp: Date.now(),
+        })}\n`;
+        const f = Gio.File.new_for_path(_DBG_PATH);
+        const s = f.append_to(Gio.FileCreateFlags.NONE, null);
+        s.write(_DBG_ENC.encode(line), null);
+        s.close(null);
+    } catch (_e) { /* ignore */ }
+}
+// #endregion
+
 export default class AnnotationExtension extends Extension {
     _trySetAnnotationActive() {
         dbusCall('SetActive', new GLib.Variant('(b)', [true]), err => {
@@ -228,7 +251,14 @@ export default class AnnotationExtension extends Extension {
                 list.push([id, Math.round(x), Math.round(y), Math.round(w), Math.round(h)]);
             }
             // #region agent log
-            fetch('http://127.0.0.1:7559/ingest/80a2f4a9-78cb-409a-8218-b1ab6873e06c',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'da8410'},body:JSON.stringify({sessionId:'da8410',hypothesisId:'H1+H2',location:'extension.js:_publishChromeRegions',message:'about to call SetChromeRegions',data:{count:list.length,list,dockVisible:this._dock?.visible,dockPos:this._dock ? [this._dock.x,this._dock.y] : null,dockSize:this._dock ? [this._dock.width,this._dock.height] : null},timestamp:Date.now()})}).catch(()=>{});
+            dbgLog('H1+H2', 'extension.js:_publishChromeRegions',
+                'about to call SetChromeRegions', {
+                    count: list.length,
+                    list,
+                    dockVisible: this._dock?.visible,
+                    dockPos: this._dock ? [this._dock.x, this._dock.y] : null,
+                    dockSize: this._dock ? [this._dock.width, this._dock.height] : null,
+                });
             // #endregion
             if (!list.length) {
                 this._clearChromeRegions();
@@ -239,7 +269,8 @@ export default class AnnotationExtension extends Extension {
                 new GLib.Variant('(a(siiii))', [list]),
                 err => {
                     // #region agent log
-                    fetch('http://127.0.0.1:7559/ingest/80a2f4a9-78cb-409a-8218-b1ab6873e06c',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'da8410'},body:JSON.stringify({sessionId:'da8410',hypothesisId:'H1',location:'extension.js:_publishChromeRegions:reply',message:'SetChromeRegions reply',data:{error:err ? err.message : null},timestamp:Date.now()})}).catch(()=>{});
+                    dbgLog('H1', 'extension.js:_publishChromeRegions:reply',
+                        'SetChromeRegions reply', {error: err ? err.message : null});
                     // #endregion
                     if (err) {
                         this._regionsPublished = false;
@@ -309,8 +340,10 @@ export default class AnnotationExtension extends Extension {
                 // #region agent log
                 try {
                     const [dbgId, dbgKind] = params.deep_unpack();
-                    fetch('http://127.0.0.1:7559/ingest/80a2f4a9-78cb-409a-8218-b1ab6873e06c',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'da8410'},body:JSON.stringify({sessionId:'da8410',hypothesisId:'H1+H3',location:'extension.js:RegionActivated',message:'RegionActivated received',data:{id:dbgId,kind:dbgKind,dockAlive:!!this._dock},timestamp:Date.now()})}).catch(()=>{});
-                } catch (e) {}
+                    dbgLog('H1+H3', 'extension.js:RegionActivated',
+                        'RegionActivated received',
+                        {id: dbgId, kind: dbgKind, dockAlive: !!this._dock});
+                } catch (_e) {}
                 // #endregion
                 if (!this._dock)
                     return;
