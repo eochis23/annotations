@@ -42,6 +42,32 @@ sudo tee "$MP/etc/dconf/db/gdm.d/99-annotation-extension" >/dev/null <<'EOF'
 enabled-extensions=['annotation@annotations.local']
 EOF
 
+# Fresh Endeavour/Arch targets ship without /etc/dconf/profile/user, so the
+# compiled system-db 'local' above is orphaned (no profile references it)
+# and our toolkit-accessibility / enabled-extensions fragment silently has
+# zero effect at the user session. Create a minimal profile that chains
+# the local system db under the user's personal db. We only write the file
+# when it's absent so a distro- or admin-provided profile isn't overwritten.
+if [[ ! -f "$MP/etc/dconf/profile/user" ]]; then
+	sudo mkdir -p "$MP/etc/dconf/profile"
+	sudo tee "$MP/etc/dconf/profile/user" >/dev/null <<'EOF'
+# Chain system-wide dconf defaults (annotation extension enablement,
+# toolkit-accessibility) underneath the user's personal database.
+user-db:user
+system-db:local
+EOF
+fi
+
+# Qt's AT-SPI bridge activation is gated on the toolkit-accessibility
+# gsetting, but also honors the QT_ACCESSIBILITY env var as an explicit
+# override. Dropping it in /etc/environment.d/ guarantees the bridge is
+# on for every Qt/KDE app (incl. Kate) regardless of gsetting state.
+# Necessary for KateTrackerManager to find the editor TEXT accessible.
+sudo mkdir -p "$MP/etc/environment.d"
+sudo tee "$MP/etc/environment.d/98-annotation-qt-a11y.conf" >/dev/null <<'EOF'
+QT_ACCESSIBILITY=1
+EOF
+
 sudo arch-chroot "$MP" /bin/bash -lc 'command -v dconf >/dev/null 2>&1 && dconf update || true'
 
 echo "Installed $UUID under $DEST and refreshed dconf in chroot (if dconf is available)."
