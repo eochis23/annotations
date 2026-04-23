@@ -524,12 +524,26 @@ export class KateTrackerManager {
         }
 
         try {
+            /* Atspi.EventListener.new_simple was removed / never introspected
+             * in at-spi2-core 2.58.x (the simple callback type lacks
+             * (scope notified) so the typelib omits it). Use the regular
+             * constructor; its callback signature is (event, user_data)
+             * but we only care about the event. */
             this._atspiListener =
-                Atspi.EventListener.new_simple((event) => this._onAtspiEvent(event));
+                Atspi.EventListener.new((event, _ud) => this._onAtspiEvent(event));
         } catch (e) {
-            console.warn(`KateTrackerManager: EventListener.new_simple failed: ${e.message}`);
+            // #region agent log
+            _agentDbg('KateTrackerManager.enable', 'EventListener.new threw',
+                {hypothesisId: 'H1', err: String(e?.message ?? e)});
+            // #endregion
+            console.warn(`KateTrackerManager: EventListener.new failed: ${e.message}`);
             return;
         }
+
+        // #region agent log
+        _agentDbg('KateTrackerManager.enable', 'EventListener.new ok',
+            {hypothesisId: 'H1'});
+        // #endregion
 
         for (const type of ['object:value-changed', 'object:bounds-changed']) {
             try {
