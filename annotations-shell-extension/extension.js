@@ -61,6 +61,13 @@ function colorRegionId(i) {
     return `color-${i}`;
 }
 const CLEAR_REGION_ID = 'clear';
+/* Reserved id for the dock's bounding rect. Sent to Mutter so that:
+ *   - ink is erased under the whole dock (including separator / padding
+ *     and any gaps between buttons), and
+ *   - taps that land in those gaps are swallowed by the chrome path
+ *     instead of starting an ink stroke.
+ * The id is intentionally inert: _activateRegion ignores it. */
+const DOCK_BODY_REGION_ID = '__dock-body';
 
 function removeSource(id) {
     if (id)
@@ -266,6 +273,23 @@ export default class AnnotationExtension extends Extension {
                 return;
             }
             const list = [];
+            /* Dock body goes in first. The compositor's picker walks the
+             * list last-to-first, so this only catches presses that miss
+             * every button (the separator and any inter-button padding).
+             * Its id is inert on the extension side (_activateRegion does
+             * nothing for unknown ids), so the RegionActivated signal it
+             * triggers is a harmless no-op. */
+            if (this._dock.get_stage()) {
+                const [dx, dy] = this._dock.get_transformed_position();
+                const [dw, dh] = this._dock.get_transformed_size();
+                if (dw > 0 && dh > 0) {
+                    list.push([
+                        DOCK_BODY_REGION_ID,
+                        Math.round(dx), Math.round(dy),
+                        Math.round(dw), Math.round(dh),
+                    ]);
+                }
+            }
             for (const {id, actor} of this._regionButtons) {
                 if (!actor || actor.get_stage() === null)
                     continue;
