@@ -756,6 +756,20 @@ export class KateTrackerManager {
         if (!pidMatches) return;
 
         const type = event.type;
+        // #region agent log
+        /* Post-fix verification: we want to see object:value-changed
+         * (scroll) and object:bounds-changed reach this handler when
+         * the user scrolls Kate. Absence here would mean AT-SPI is
+         * never delivering scroll events to our listener; presence
+         * without a following SetWindowScroll means the downstream
+         * filter (scrollbar ref / adjacency test) is rejecting them. */
+        _agentDbg('KateTrackerManager._onAtspiEvent', 'kate event', {
+            hypothesisId: 'post-fix',
+            pid: evPid,
+            type,
+            role: safeRole(event.source),
+        });
+        // #endregion
         for (const t of this._trackers.values()) {
             if (t.pid !== evPid) continue;
             if (type === 'object:value-changed') {
