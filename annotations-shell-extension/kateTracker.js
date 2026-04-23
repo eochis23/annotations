@@ -643,9 +643,20 @@ export class KateTrackerManager {
 
         for (const type of ['object:value-changed', 'object:bounds-changed']) {
             try {
-                this._atspiListener.register(type);
+                const rc = this._atspiListener.register(type);
                 this._atspiRegistered.push(type);
+                // #region agent log
+                /* H9a: register() is introspected as returning gboolean;
+                 * a silent false means AT-SPI declined the subscription
+                 * (e.g. bad event name form). Capture the rc. */
+                _agentDbg('KateTrackerManager.enable', 'listener.register',
+                    {hypothesisId: 'H9a', type, rc});
+                // #endregion
             } catch (e) {
+                // #region agent log
+                _agentDbg('KateTrackerManager.enable', 'listener.register threw',
+                    {hypothesisId: 'H9a', type, err: String(e?.message ?? e)});
+                // #endregion
                 console.warn(`KateTrackerManager: register(${type}) failed: ${e.message}`);
             }
         }
@@ -740,6 +751,24 @@ export class KateTrackerManager {
     }
 
     _onAtspiEvent(event) {
+        // #region agent log
+        /* H9b/H9c: fire BEFORE any filtering so we can tell
+         * "listener is wired but our Kate filter rejects" apart from
+         * "listener never fires for anything". Cap to 40 entries so a
+         * noisy session can't drown the journal. */
+        if ((this._anyEventCount ?? 0) < 40) {
+            this._anyEventCount = (this._anyEventCount ?? 0) + 1;
+            _agentDbg('KateTrackerManager._onAtspiEvent', 'any event (pre-filter)', {
+                hypothesisId: 'H9b',
+                hasEvent: !!event,
+                hasSource: !!(event && event.source),
+                type: event?.type ?? null,
+                sourcePid: (event && event.source) ? safePid(event.source) : -1,
+                trackers: this._trackers.size,
+                seq: this._anyEventCount,
+            });
+        }
+        // #endregion
         if (!event || !event.source) return;
         if (this._trackers.size === 0) return;
 
