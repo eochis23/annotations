@@ -334,6 +334,52 @@ class KateWindowTracker {
             /* Scroll state may be non-zero at discovery (user opened
              * Kate already scrolled into the doc). Push once. */
             this._republishScroll();
+            // #region agent log
+            /* H25/H26/H27 diagnostic poll: every 500ms for 60s after
+             * discovery, query char0's Y via AT-SPI Text interface.
+             * If Y changes during the user's scroll window but
+             * _onAtspiEvent never fires for Kate's pid, Kate's Qt
+             * bridge does not emit scroll-related events (H25). If Y
+             * never changes, the user didn't actually scroll (H27).
+             * If Y changes AND events fire on every change, H9b fix
+             * is vindicated - we're already good. */
+            this._pollTicks = 0;
+            this._pollLastY = null;
+            if (!this._pollId) {
+                this._pollId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 500, () => {
+                    this._pollTicks++;
+                    let y = null;
+                    try {
+                        const text = this.editor?.query_text?.();
+                        if (text) {
+                            const r = text.get_character_extents(0, Atspi.CoordType.WINDOW);
+                            if (r) y = r.y;
+                        }
+                    } catch (e) {}
+                    let sbVal = null;
+                    try {
+                        const val = this.scrollbar?.query_value?.();
+                        if (val) sbVal = val.get_current_value();
+                    } catch (e) {}
+                    if (y !== this._pollLastY || this._pollTicks % 10 === 0) {
+                        _agentDbg('KateWindowTracker.poll', 'char0 y', {
+                            hypothesisId: 'H25-H27',
+                            pid: this.pid,
+                            tick: this._pollTicks,
+                            y,
+                            deltaY: this._pollLastY === null ? null : (y - this._pollLastY),
+                            sbVal,
+                        });
+                    }
+                    this._pollLastY = y;
+                    if (this._pollTicks >= 120) {
+                        this._pollId = 0;
+                        return GLib.SOURCE_REMOVE;
+                    }
+                    return GLib.SOURCE_CONTINUE;
+                });
+            }
+            // #endregion
         }
     }
 
@@ -580,6 +626,9 @@ class KateWindowTracker {
 
     destroy() {
         this._retryId = removeSource(this._retryId);
+        // #region agent log
+        if (this._pollId) { this._pollId = removeSource(this._pollId); }
+        // #endregion
         if (this._sizeId) { try { this.win.disconnect(this._sizeId); } catch (e) {} this._sizeId = 0; }
         if (this._posId)  { try { this.win.disconnect(this._posId);  } catch (e) {} this._posId  = 0; }
         if (this._unmId)  { try { this.win.disconnect(this._unmId);  } catch (e) {} this._unmId  = 0; }
