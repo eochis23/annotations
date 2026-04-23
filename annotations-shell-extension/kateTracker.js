@@ -261,7 +261,7 @@ class KateWindowTracker {
         }
         if (!app) return;
 
-        const found = { editor: null, editorArea: 0, scrollbar: null };
+        const found = { editor: null, editorArea: 0, scrollbar: null, allScrollbars: [] };
         // #region agent log
         /* Direct child count of the Kate app accessible. Pre-fix
          * (toolkit-accessibility=false) this is 0 even though the app
@@ -321,6 +321,7 @@ class KateWindowTracker {
             this.editor = found.editor;
         if (found.scrollbar)
             this.scrollbar = found.scrollbar;
+        this._allScrollbars = found.allScrollbars;
 
         // #region agent log
         const edExt = this.editor
@@ -329,8 +330,33 @@ class KateWindowTracker {
         const sbExt = this.scrollbar
             ? safeExtents(this.scrollbar, Atspi.CoordType.WINDOW)
             : null;
+        /* H32/H33/H36 probe: log every vertical scrollbar Kate exposes,
+         * with its Value interface properties. Kate's editor often ships
+         * with multiple scrollbars (KateView, optional minimap, tool
+         * views) and dragging the wrong one would silently miss our
+         * cached reference. */
+        const sbDump = [];
+        for (let i = 0; i < this._allScrollbars.length && i < 8; i++) {
+            const s = this._allScrollbars[i];
+            const ext = s.ext;
+            let cur = null, min = null, max = null, inc = null, err = null;
+            try {
+                const v = s.node?.get_value_iface?.();
+                if (v) {
+                    cur = v.get_current_value();
+                    min = v.get_minimum_value?.();
+                    max = v.get_maximum_value?.();
+                    inc = v.get_minimum_increment?.();
+                }
+            } catch (e) { err = String(e?.message ?? e).slice(0, 80); }
+            sbDump.push({
+                ext: {x: ext.x, y: ext.y, w: ext.width, h: ext.height},
+                cur, min, max, inc, err,
+                cached: s.node === this.scrollbar,
+            });
+        }
         _agentDbg('KateWindowTracker._tryDiscover', 'discovery result', {
-            hypothesisId: 'H3',
+            hypothesisId: 'H3+H32',
             pid: this.pid,
             wmClass: this.wmClass,
             appFound: !!app,
@@ -339,6 +365,7 @@ class KateWindowTracker {
             editorArea: found.editorArea,
             editorExt: edExt ? {x: edExt.x, y: edExt.y, w: edExt.width, h: edExt.height} : null,
             scrollbarExt: sbExt ? {x: sbExt.x, y: sbExt.y, w: sbExt.width, h: sbExt.height} : null,
+            allScrollbars: sbDump,
             retry: this._retryCount,
         });
         // #endregion
@@ -378,23 +405,38 @@ class KateWindowTracker {
                     }
 
                     // #region agent log
-                    /* Keep instrumentation active until user confirms
-                     * scroll-follow works end-to-end. Sample sparsely:
-                     * first 3 ticks, then every 25th (~5s), plus every
-                     * tick where the scrollbar value actually changed
-                     * since last tick - those are the interesting ones. */
+                    /* H32/H33/H36 probe: every poll tick, read the value
+                     * of EVERY vertical scrollbar Kate exposed at
+                     * discovery. If a scrollbar we did NOT cache is the
+                     * one changing when the user drags the thumb, we'll
+                     * see its cur move here while our cached one stays
+                     * put. */
+                    const sbSnap = [];
+                    if (this._allScrollbars) {
+                        for (let i = 0; i < this._allScrollbars.length; i++) {
+                            const s = this._allScrollbars[i];
+                            let c = null;
+                            try { c = s.node?.get_value_iface?.()?.get_current_value(); }
+                            catch (e) { c = 'err'; }
+                            const last = s._lastC;
+                            s._lastC = c;
+                            if (c !== last) sbSnap.push({i, cur: c, prev: last, cached: s.node === this.scrollbar, ext: s.ext});
+                        }
+                    }
                     const changed = cur !== null && cur !== this._pollLastLoggedSbVal;
                     if (this._pollTicks <= 3 ||
                         this._pollTicks % 25 === 0 ||
-                        changed) {
+                        changed ||
+                        sbSnap.length > 0) {
                         _agentDbg('KateWindowTracker.poll', 'probe', {
-                            hypothesisId: 'H29',
+                            hypothesisId: 'H29+H32',
                             pid: this.pid,
                             tick: this._pollTicks,
                             sbVal: cur,
                             baseSbVal: this.baseSbVal,
                             lineHeight: this.lineHeight,
                             lastScrollY: this.lastScrollY,
+                            otherSbChanges: sbSnap,
                         });
                         this._pollLastLoggedSbVal = cur;
                     }
@@ -446,6 +488,11 @@ class KateWindowTracker {
                     found.scrollbar = node;
                 }
             }
+            /* Also collect EVERY vertical scrollbar we encounter, for
+             * the H33/H36 probe: if dragging a scrollbar thumb changes
+             * a different accessible than the one we cached, we'll see
+             * it here. */
+            if (ext) found.allScrollbars.push({node, ext});
         }
 
         const n = safeChildCount(node);

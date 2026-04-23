@@ -317,7 +317,7 @@ export default class AnnotationExtension extends Extension {
         });
         trash.connect('clicked', () => this._activateRegion(CLEAR_REGION_ID));
         this._dock.add_child(separator);
-        this._dock.add_child(undo);
+        // this._dock.add_child(undo);
         this._dock.add_child(trash);
         this._regionButtons.push({id: UNDO_REGION_ID, actor: undo});
         this._regionButtons.push({id: CLEAR_REGION_ID, actor: trash});
