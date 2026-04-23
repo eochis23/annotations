@@ -156,6 +156,17 @@ class KateWindowTracker {
          * both char0 and editor move together, and their delta stays
          * constant until real scrolling happens. */
         this.charBaseYRel = null;
+        /* Scrollbar Value.current_value at the moment of first successful
+         * discovery. Kate reports scroll in lines (not pixels), so we
+         * compute a pixel scroll delta as (cur - base) * lineHeight
+         * when publishing. If the user opens Kate already scrolled into
+         * the doc, this zeroes out scrollY at discovery time, which is
+         * what we want (no existing ink to realign yet). */
+        this.baseSbVal = null;
+        /* Pixel height of a single text line, measured at discovery via
+         * char 0's extent height. Falls back to 14 if the accessible
+         * returns a degenerate rect (e.g. char 0 off-screen). */
+        this.lineHeight = 14;
         this.lastRegionSig = '';    /* "x,y,w,h" last published, so we debounce */
         this.lastScrollY = null;
 
@@ -334,73 +345,59 @@ class KateWindowTracker {
             /* Scroll state may be non-zero at discovery (user opened
              * Kate already scrolled into the doc). Push once. */
             this._republishScroll();
-            // #region agent log
-            /* H25/H26/H27 diagnostic poll: every 500ms for 60s after
-             * discovery, query char0's Y via AT-SPI Text interface.
-             * If Y changes during the user's scroll window but
-             * _onAtspiEvent never fires for Kate's pid, Kate's Qt
-             * bridge does not emit scroll-related events (H25). If Y
-             * never changes, the user didn't actually scroll (H27).
-             * If Y changes AND events fire on every change, H9b fix
-             * is vindicated - we're already good. */
+            /* Kate does not reliably emit AT-SPI object:value-changed
+             * events on its scrollbar (confirmed empirically in session
+             * da8410: zero Kate-pid events between discovery and the
+             * user scrolling through 2825 lines). Instead, poll the
+             * scrollbar's Value.current_value and republish whenever it
+             * changes. 200ms keeps pen-held-in-place tracking visually
+             * smooth while staying well inside GJS's idle budget. */
             this._pollTicks = 0;
-            this._pollLastY = null;
+            this._pollLastSbVal = null;
             if (!this._pollId) {
-                /* H28 diagnostic: every 500ms query both Text and Value
-                 * interfaces, and fall back to the editor's own extents
-                 * (which we KNOW work - discovery used them). Record the
-                 * failure mode so we can tell a missing interface apart
-                 * from a throwing call apart from a stable value. */
-                this._pollId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 500, () => {
+                this._pollId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 200, () => {
                     this._pollTicks++;
-                    const diag = {
-                        hypothesisId: 'H28-v2',
-                        pid: this.pid,
-                        tick: this._pollTicks,
-                        edIsText: null,
-                        edHasTextIface: null,
-                        edTextY: null,
-                        edTextErr: null,
-                        sbIsValue: null,
-                        sbHasValueIface: null,
-                        sbVal: null,
-                        sbValErr: null,
-                    };
+                    let cur = null;
                     try {
-                        if (this.editor) {
-                            diag.edIsText = !!this.editor.is_text?.();
-                            const tIface = this.editor.get_text_iface?.();
-                            diag.edHasTextIface = !!tIface;
-                            if (tIface) {
-                                try {
-                                    const r = tIface.get_character_extents(0, Atspi.CoordType.WINDOW);
-                                    diag.edTextY = r ? r.y : 'rect-null';
-                                } catch (e) { diag.edTextErr = String(e?.message ?? e).slice(0, 80); }
-                            }
-                        }
-                    } catch (e) { diag.edTextErr = String(e?.message ?? e).slice(0, 80); }
-                    try {
-                        if (this.scrollbar) {
-                            diag.sbIsValue = !!this.scrollbar.is_value?.();
-                            const vIface = this.scrollbar.get_value_iface?.();
-                            diag.sbHasValueIface = !!vIface;
-                            if (vIface) {
-                                try { diag.sbVal = vIface.get_current_value(); }
-                                catch (e) { diag.sbValErr = String(e?.message ?? e).slice(0, 80); }
-                            }
-                        }
-                    } catch (e) { diag.sbValErr = String(e?.message ?? e).slice(0, 80); }
-                    if (this._pollTicks <= 3 || this._pollTicks % 10 === 0) {
-                        _agentDbg('KateWindowTracker.poll', 'probe', diag);
+                        const v = this.scrollbar?.get_value_iface?.();
+                        if (v) cur = v.get_current_value();
+                    } catch (e) { /* accessible died; destroy path will clear us */ }
+
+                    if (cur !== null && cur !== this._pollLastSbVal) {
+                        this._pollLastSbVal = cur;
+                        /* Re-attempt baseline capture on the first tick
+                         * the scrollbar hands us a real value - discovery
+                         * may have completed before the scrollbar wrapper
+                         * was fully populated. */
+                        if (this.baseSbVal === null) this._captureBaseline();
+                        this._republishScroll();
                     }
-                    if (this._pollTicks >= 120) {
-                        this._pollId = 0;
-                        return GLib.SOURCE_REMOVE;
+
+                    // #region agent log
+                    /* Keep instrumentation active until user confirms
+                     * scroll-follow works end-to-end. Sample sparsely:
+                     * first 3 ticks, then every 25th (~5s), plus every
+                     * tick where the scrollbar value actually changed
+                     * since last tick - those are the interesting ones. */
+                    const changed = cur !== null && cur !== this._pollLastLoggedSbVal;
+                    if (this._pollTicks <= 3 ||
+                        this._pollTicks % 25 === 0 ||
+                        changed) {
+                        _agentDbg('KateWindowTracker.poll', 'probe', {
+                            hypothesisId: 'H29',
+                            pid: this.pid,
+                            tick: this._pollTicks,
+                            sbVal: cur,
+                            baseSbVal: this.baseSbVal,
+                            lineHeight: this.lineHeight,
+                            lastScrollY: this.lastScrollY,
+                        });
+                        this._pollLastLoggedSbVal = cur;
                     }
+                    // #endregion
                     return GLib.SOURCE_CONTINUE;
                 });
             }
-            // #endregion
         }
     }
 
@@ -472,26 +469,37 @@ class KateWindowTracker {
      * changes it. That lets later scroll-event handling compute a
      * pure pixel delta without also picking up tool-view reflow noise. */
     _captureBaseline() {
-        if (!this.editor || this.charBaseYRel !== null) return;
+        /* Capture char0-relative-y, scrollbar baseline value, and the
+         * per-line pixel height. Scroll follows primarily on the
+         * scrollbar Value (always readable, even when char 0 is off
+         * screen), so baseSbVal + lineHeight is what production uses;
+         * charBaseYRel is kept for small-scroll sanity checks. */
         try {
-            /* gjs/Atspi exposes the Text interface as
-             * AtspiAccessible.get_text_iface(); the older query_text()
-             * name isn't bound here (confirmed runtime: every poll showed
-             * qTextType:'undefined' for query_text on Kate's editor). */
-            const text = this.editor.get_text_iface?.();
-            if (!text) return;
-            const rect = text.get_character_extents(0, Atspi.CoordType.WINDOW);
-            const ed = safeExtents(this.editor, Atspi.CoordType.WINDOW);
-            /* Qt's accessible-text impl has been observed to hand back an
-             * all-zero rect when char 0 is scrolled far enough out of
-             * view that the layout cache doesn't currently hold it.
-             * Treat that as "no baseline available" and let the next
-             * value-changed event re-try; baselining to a garbage 0
-             * would wedge every future scroll delta. */
-            if (rect && ed && !(rect.x === 0 && rect.y === 0 &&
-                                rect.width === 0 && rect.height === 0))
-                this.charBaseYRel = rect.y - ed.y;
-        } catch (e) { /* no Text interface? we'll fall back later */ }
+            if (this.editor) {
+                const text = this.editor.get_text_iface?.();
+                if (text) {
+                    const rect = text.get_character_extents(0, Atspi.CoordType.WINDOW);
+                    const ed = safeExtents(this.editor, Atspi.CoordType.WINDOW);
+                    /* Qt's accessible-text impl has been observed to hand
+                     * back an all-zero rect when char 0 is scrolled far
+                     * enough out of view that the layout cache doesn't
+                     * currently hold it. Treat that as "no baseline
+                     * available" and let the next retry capture it. */
+                    const good = rect && ed && !(rect.x === 0 && rect.y === 0 &&
+                                                 rect.width === 0 && rect.height === 0);
+                    if (good && this.charBaseYRel === null)
+                        this.charBaseYRel = rect.y - ed.y;
+                    if (good && rect.height > 0)
+                        this.lineHeight = rect.height;
+                }
+            }
+        } catch (e) { /* text iface missing; lineHeight stays at its 14px default */ }
+        try {
+            if (this.scrollbar && this.baseSbVal === null) {
+                const v = this.scrollbar.get_value_iface?.();
+                if (v) this.baseSbVal = v.get_current_value();
+            }
+        } catch (e) { /* value iface missing; scrollbar path unusable, stays at null */ }
     }
 
     _republishRegion() {
@@ -532,17 +540,35 @@ class KateWindowTracker {
         let sy = 0;
         let ok = false;
 
-        if (this.charBaseYRel !== null) {
+        /* Primary signal: scrollbar Value.current_value delta * lineHeight.
+         * Runtime evidence (session da8410): Kate reports scroll position
+         * in line units via the Atspi Value interface on the scrollbar,
+         * and this value is readable at every moment regardless of
+         * whether char 0 is currently on screen. The Text-iface
+         * char0-extent approach only works for scrolls where char 0
+         * stays visible (first screen or two); beyond that Qt returns a
+         * degenerate (0,0,0,0) rect and we'd get stuck. */
+        if (this.scrollbar && this.baseSbVal !== null) {
+            try {
+                const v = this.scrollbar.get_value_iface?.();
+                if (v) {
+                    const cur = v.get_current_value();
+                    sy = Math.round((cur - this.baseSbVal) * this.lineHeight);
+                    ok = true;
+                }
+            } catch (e) { /* stale accessible; fall through to text-iface */ }
+        }
+
+        /* Fallback: char 0 text-iface delta. Only reachable when the
+         * scrollbar path above failed (e.g. no scrollbar accessible
+         * was found for this window). Same guard against Qt's zero-rect
+         * degenerate response. */
+        if (!ok && this.charBaseYRel !== null) {
             try {
                 const text = this.editor.get_text_iface?.();
                 if (text) {
                     const rect = text.get_character_extents(0, Atspi.CoordType.WINDOW);
                     const ed = safeExtents(this.editor, Atspi.CoordType.WINDOW);
-                    /* Same guard as _captureBaseline: trust a
-                     * non-degenerate rect only. A zero-rect response
-                     * here would compute a spurious multi-hundred-px
-                     * scroll spike and shove every follow stroke off
-                     * the editor for one frame. */
                     if (rect && ed && !(rect.x === 0 && rect.y === 0 &&
                                         rect.width === 0 && rect.height === 0)) {
                         const curRel = rect.y - ed.y;
@@ -550,17 +576,7 @@ class KateWindowTracker {
                         ok = true;
                     }
                 }
-            } catch (e) { /* stale accessible; drop through */ }
-        }
-
-        if (!ok && this.scrollbar) {
-            try {
-                const v = this.scrollbar.get_value_iface?.();
-                if (v) {
-                    sy = Math.round(v.get_current_value());
-                    ok = true;
-                }
-            } catch (e) { /* no Value interface? give up silently */ }
+            } catch (e) { /* fall through, give up */ }
         }
 
         if (!ok) return;
