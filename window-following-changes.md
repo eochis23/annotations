@@ -40,10 +40,20 @@ schedule a recompose so the dock mask tracks the dock's geometry.
   the first time a window receives ink.
 
 `WindowInk` owns a `cairo_surface_t` sized to the window's logical
-`frame_rect` plus per-window signal handler ids (`position-changed`,
-`size-changed`, `notify::minimized`, `workspace-changed`, `unmanaged`).
-On `size-changed` the surface is reallocated with the existing pixels
-blitted to the top-left (shrinks clip, grows show transparent).
+`frame_rect`, a `GPtrArray *strokes` of vector `Stroke` objects (the
+stored history used for object-erasing and for re-rasterization after
+resize or deletion), and per-window signal handler ids
+(`position-changed`, `size-changed`, `notify::minimized`,
+`workspace-changed`, `unmanaged`). On `size-changed` the surface is
+reallocated and its pixels are rebuilt from the stored strokes rather
+than blitted from the old bitmap, so ink survives window resize within
+the bounds of the stroke coordinates (anything outside the new frame
+is naturally clipped by cairo).
+
+The matching `unattached_strokes` list lives on the layer itself and
+tracks strokes that landed over the desktop; on stage resize the
+desktop surface is re-rasterized from those strokes for the same
+reason.
 
 Stroke state tracks the anchor window (or `NULL` for unattached), the last
 segment endpoint in target-local coordinates, and the last known tablet
@@ -129,9 +139,11 @@ Mouse button strokes and non-pressure touch fall back to a cached
   endpoint plus two circular caps at `(x1, y1)` and `(x2, y2)` so
   consecutive segments join smoothly and zero-length taps render as a
   round dot.
-- Pressure is baked into pixels on the per-window cairo surface - we do
-  not store a stroke-point history. Future persistence features would
-  have to add one.
+- In addition to the raster feedback in the surface, every ink point
+  is appended to the in-flight `Stroke` on the current target buffer
+  (`WindowInk->strokes` or `unattached_strokes`). Storing the polyline
+  turns erase into an object-level operation (see below) and lets
+  resize / post-erase repaints regenerate pixels without loss.
 
 #### Tilt-widened ink
 
@@ -142,12 +154,13 @@ degrees, libinput's native units), only for real tablet tools
 (`clutter_event_get_device_tool` non-NULL). Magnitude is normalised by
 `ANNOT_TILT_DEG_FULL = 60` and clamped to `[0, 1]`; the factor is
 `1 + ANNOT_TILT_WIDTH_BOOST * magnitude` with `ANNOT_TILT_WIDTH_BOOST =
-1.5`, i.e. a vertical pen is unchanged and a fully tilted pen is up to
-2.5x wider. The factor multiplies into the existing pressure-based
-width, is cached between events as `last_tilt_factor`, and renders
-through the existing trapezoid + circular-cap geometry - no directional
-nib; the effect is an isotropic widening reminiscent of pressing the
-side of a marker onto the paper.
+1.875` (bumped 25% stronger than the original 1.5 so the tilt effect
+is more visible), i.e. a vertical pen is unchanged and a fully tilted
+pen is up to ~2.875x wider. The factor multiplies into the existing
+pressure-based width, is cached between events as `last_tilt_factor`,
+and renders through the existing trapezoid + circular-cap geometry -
+no directional nib; the effect is an isotropic widening reminiscent
+of pressing the side of a marker onto the paper.
 
 #### Tap-to-clear gestures
 
@@ -235,14 +248,23 @@ RegionActivated routing.
 - Three quick pen/touch taps on the same window within 500 ms clear
   just that window's ink; four quick taps within 750 ms (any
   combination of windows or the desktop) clear every window's ink.
-- Holding any pen barrel button puts the stroke path in erase mode:
-  segments render with `CAIRO_OPERATOR_CLEAR` at 2x the ink width, so
-  a held-barrel drag scrubs ink off the window it lands on (or off
-  the unattached surface over the desktop). Releasing the barrel
-  switches back to ink on the very next segment; the tip never has
-  to lift. Using the pen's flip-side eraser tool triggers the same
-  erase mode even without a barrel press. Barrel presses over the
-  dock are silently consumed (no color/clear activation).
+- Holding any pen barrel button puts the stroke path in erase mode.
+  Erase is now an **object eraser**: each eraser sub-segment is
+  tested for proximity against the stored `Stroke` polylines on the
+  current target buffer, and any stroke that the eraser's footprint
+  touches is removed in full from the list. When one or more strokes
+  are removed, the entire target surface is cleared and re-rasterized
+  from the surviving strokes, so the deletion is visible immediately
+  and no stroke is left with a partial gap. The eraser footprint is
+  the stroke half-width the pen would draw at the current pressure /
+  tilt scaled by `ANNOT_ERASE_WIDTH_FACTOR = 2.0`, with a floor of
+  `ANNOT_ERASE_MIN_RADIUS = 8 px` so light touches still connect.
+  The broad-phase uses a per-stroke cached bbox so hit-testing stays
+  cheap even on dense canvases. Releasing the barrel switches back to
+  ink on the very next segment; the tip never has to lift. Using the
+  pen's flip-side eraser tool triggers the same erase mode even
+  without a barrel press. Barrel presses over the dock are silently
+  consumed (no color/clear activation).
 
 ## Known limitations / out of scope
 
@@ -251,7 +273,8 @@ RegionActivated routing.
 - No animation handling. Minimize / maximize / workspace transitions
   snap ink on signal completion rather than following the animation.
 - No stretch-on-resize. A window that doubles in size keeps the ink at
-  its original position and clips on the new bounds.
+  its original (surface-local) position and re-rasterizes within the
+  new bounds; anything that lies outside the new frame is clipped.
 - No overview preview painting. Overview thumbnails do not render ink.
 - One stroke in flight globally; multi-seat concurrent strokes are not
   modeled.
