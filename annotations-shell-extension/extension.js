@@ -93,6 +93,12 @@ export default class AnnotationExtension extends Extension {
                  * name acquisition and likely got E_NAME_HAS_NO_OWNER. */
                 this._regionsPublished = false;
                 this._publishChromeRegions?.();
+                /* Mutter's compiled-in default color is red; the dock
+                 * shows COLORS[this._activeColorIndex] as armed. Push the
+                 * armed color across the bus on every successful activation
+                 * so the two stay in sync (first enable, process restart,
+                 * name re-acquisition). */
+                this._publishActiveColor?.();
                 return;
             }
             if (!this._dock)
@@ -232,6 +238,21 @@ export default class AnnotationExtension extends Extension {
         }
     }
 
+    /* Publish the currently-armed color to Mutter. Fire-and-forget: a
+     * failure just leaves Mutter with whatever color it had, and the
+     * next SetActive success (or user color tap) will push again. */
+    _publishActiveColor() {
+        const i = this._activeColorIndex ?? 0;
+        const c = COLORS[i];
+        if (!c)
+            return;
+        const params = new GLib.Variant('(dddd)', [c.r, c.g, c.b, c.a]);
+        dbusCall('SetColor', params, err => {
+            if (err)
+                console.warn(`Annotation SetColor(initial): ${err.message}`);
+        });
+    }
+
     enable() {
         this._dockPositionTimeout = 0;
         this._idlePos = 0;
@@ -301,8 +322,12 @@ export default class AnnotationExtension extends Extension {
         this._regionButtons.push({id: UNDO_REGION_ID, actor: undo});
         this._regionButtons.push({id: CLEAR_REGION_ID, actor: trash});
 
-        /* Mutter's initial color matches COLORS[0]; show that on the dock
-         * so the user sees which color is armed without having to tap. */
+        /* Mark COLORS[0] as the armed color on the dock. Mutter's
+         * compile-time default is red, so _trySetAnnotationActive pushes
+         * this color across the bus after SetActive(true) succeeds to
+         * keep the indicator and the compositor's actual pen color in
+         * sync. _activateRegion drives later changes through the same
+         * SetColor path. */
         this._setActiveColor(0);
 
         Main.uiGroup.add_child(this._dock);

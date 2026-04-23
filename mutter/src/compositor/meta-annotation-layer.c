@@ -1217,9 +1217,14 @@ meta_annotation_layer_new (MetaBackend *backend, MetaDisplay *display)
   layer->display = display;
   layer->active = FALSE;
   layer->paused = FALSE;
-  layer->rgba[0] = 1.0f;
-  layer->rgba[1] = 0.2f;
-  layer->rgba[2] = 0.2f;
+  /* Matches COLORS[0] ("Black pen") in the shell extension's dock so
+   * Mutter and the dock agree on which color is armed before the
+   * extension's first SetColor lands. Not pure black: a slight lift
+   * keeps strokes visible against true-black backgrounds (terminals,
+   * dark-theme editors). */
+  layer->rgba[0] = 0.15f;
+  layer->rgba[1] = 0.15f;
+  layer->rgba[2] = 0.15f;
   layer->rgba[3] = 1.0f;
   layer->last_pressure = 1.0f;
   layer->last_tilt_factor = 1.0f;
