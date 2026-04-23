@@ -22,6 +22,7 @@
 #include "backends/meta-sprite.h"
 #include "backends/meta-backend-private.h"
 #include "backends/meta-cursor-tracker-private.h"
+#include "core/meta-annotation-input.h"
 
 #include "clutter/clutter-sprite-private.h"
 
@@ -119,6 +120,16 @@ meta_sprite_update_cursor (ClutterSprite *sprite,
     }
   else
     {
+      /* When the annotation overlay is active, the pen rides on top of the
+       * non-reactive annotation actor, so picking falls through to the
+       * window/surface beneath, which provides a regular arrow cursor for
+       * the tablet sprite. That sprite tracks the pen's position, so the
+       * cursor visibly follows the pen. Force the tablet/touch sprite
+       * cursor to NULL while annotation isolation is active, so only the
+       * ink shows. */
+      if (meta_annotation_input_get_non_mouse_pointer_isolated ())
+        cursor = NULL;
+
       meta_cursor_renderer_set_cursor (cursor_renderer, cursor);
     }
 }
