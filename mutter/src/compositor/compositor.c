@@ -1829,8 +1829,14 @@ meta_compositor_route_annotation_event (MetaCompositor    *compositor,
                                                             &pressed_id);
 
   /* Synthetic dock activation: hit-test chrome regions on press, emit
-   * RegionActivated, and consume the press so no ink stroke begins. */
-  if (type == CLUTTER_BUTTON_PRESS || type == CLUTTER_TOUCH_BEGIN)
+   * RegionActivated, and consume the press so no ink stroke begins.
+   * Only the primary button (== pen tip for a tablet tool, left click
+   * for a mouse) and touch presses count. Barrel buttons (clutter
+   * buttons 2/3/8 on a tool) must not activate dock actions, since
+   * they're reserved for the eraser modifier. */
+  if ((type == CLUTTER_BUTTON_PRESS &&
+       clutter_event_get_button (event) == CLUTTER_BUTTON_PRIMARY) ||
+      type == CLUTTER_TOUCH_BEGIN)
     {
       graphene_point_t p;
       const char *id;

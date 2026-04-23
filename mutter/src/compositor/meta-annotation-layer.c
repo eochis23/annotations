@@ -28,6 +28,9 @@
 #define ANNOT_TILT_DEG_FULL 60.0f
 /* How much tilt can widen the stroke. 1.5 => up to 2.5x width at full tilt. */
 #define ANNOT_TILT_WIDTH_BOOST 1.5f
+/* Erase-mode stroke width is this much wider than ink at the same
+ * pressure / tilt so the eraser feels usable at normal BASE_WIDTH. */
+#define ANNOT_ERASE_WIDTH_FACTOR 2.0f
 
 /* Tap-to-clear gesture thresholds. */
 #define TAP_HISTORY_SIZE      4
@@ -89,6 +92,13 @@ struct _MetaAnnotationLayer
   gboolean stroke_active;
   float last_pressure;          /* last known tablet pressure, [0, 1] */
   float last_tilt_factor;       /* width multiplier from tilt magnitude, >= 1 */
+
+  /* Bitmask of currently-held pen barrel buttons (tool events with a
+   * non-primary clutter button, e.g. BTN_STYLUS -> 2, BTN_STYLUS2 -> 3,
+   * BTN_STYLUS3 -> 8). Non-zero => erase mode. Primary (the tip) never
+   * flips a bit here. Cleared on disable / pause so a pen that leaves
+   * proximity mid-hold doesn't strand us in erase mode. */
+  guint32 pen_barrel_buttons;
 
   /* Pending tap state: set on press/touch-begin, consumed on
    * release/touch-end to decide whether the interaction was brief +
@@ -1033,6 +1043,10 @@ meta_annotation_layer_set_active (MetaAnnotationLayer *layer,
 
   layer->active = active;
   meta_annotation_input_set_non_mouse_pointer_isolated (active);
+  /* Drop any stuck barrel modifiers so toggling active always starts
+   * in ink (not erase) mode. */
+  if (!active)
+    layer->pen_barrel_buttons = 0;
   update_actor_visibility (layer);
 }
 
@@ -1063,6 +1077,12 @@ meta_annotation_layer_set_paused (MetaAnnotationLayer *layer,
       layer->stroke_active = FALSE;
       set_stroke_anchor (layer, NULL);
     }
+
+  /* Same reasoning as deactivate: a pen that left proximity mid-hold
+   * would never deliver a release, and we'd be stuck in erase on
+   * resume. Clearing here is cheap and correct. */
+  if (!was_paused && paused)
+    layer->pen_barrel_buttons = 0;
 
   update_actor_visibility (layer);
 }
@@ -1104,23 +1124,35 @@ draw_segment (MetaAnnotationLayer *layer,
               float                p1,
               float                p2,
               float                tilt1,
-              float                tilt2)
+              float                tilt2,
+              gboolean             erase)
 {
   cairo_t *cr;
   float dx = x2 - x1;
   float dy = y2 - y1;
   float len2 = dx * dx + dy * dy;
-  float w1 = ANNOT_BASE_WIDTH * pressure_to_width_multiplier (p1) * tilt1;
-  float w2 = ANNOT_BASE_WIDTH * pressure_to_width_multiplier (p2) * tilt2;
+  float scale = erase ? ANNOT_ERASE_WIDTH_FACTOR : 1.0f;
+  float w1 = ANNOT_BASE_WIDTH * pressure_to_width_multiplier (p1) * tilt1 * scale;
+  float w2 = ANNOT_BASE_WIDTH * pressure_to_width_multiplier (p2) * tilt2 * scale;
 
   if (!target)
     return;
 
   cr = cairo_create (target);
-  cairo_set_source_rgba (cr,
-                         layer->rgba[0], layer->rgba[1],
-                         layer->rgba[2], layer->rgba[3]);
-  cairo_set_operator (cr, CAIRO_OPERATOR_OVER);
+  if (erase)
+    {
+      /* CLEAR ignores the source color, but cairo still requires a
+       * source to be set; any opaque source picks out the shape alpha. */
+      cairo_set_source_rgba (cr, 0.0, 0.0, 0.0, 1.0);
+      cairo_set_operator (cr, CAIRO_OPERATOR_CLEAR);
+    }
+  else
+    {
+      cairo_set_source_rgba (cr,
+                             layer->rgba[0], layer->rgba[1],
+                             layer->rgba[2], layer->rgba[3]);
+      cairo_set_operator (cr, CAIRO_OPERATOR_OVER);
+    }
 
   if (len2 < 0.25f)
     {
@@ -1166,6 +1198,65 @@ pointer_has_draw_button (const ClutterEvent *event)
   ClutterModifierType state = clutter_event_get_state (event);
 
   return (state & CLUTTER_BUTTON1_MASK) != 0;
+}
+
+/* Returns TRUE if the event carries a tool and that tool is the eraser
+ * tip. Flipping the pen upside-down on tablets that expose a physical
+ * eraser triggers this. */
+static gboolean
+event_is_eraser_tool (const ClutterEvent *event)
+{
+  ClutterInputDeviceTool *tool = clutter_event_get_device_tool (event);
+
+  if (!tool)
+    return FALSE;
+  return clutter_input_device_tool_get_tool_type (tool) ==
+         CLUTTER_INPUT_DEVICE_TOOL_ERASER;
+}
+
+/* Erase mode is on when any pen barrel button is held (tracked in
+ * pen_barrel_buttons) or when the tool currently in use is the eraser
+ * tip of the stylus. Sampled per segment so a hold / release mid-stroke
+ * switches behavior on the very next motion event. */
+static gboolean
+erase_is_active (MetaAnnotationLayer *layer, const ClutterEvent *event)
+{
+  if (layer->pen_barrel_buttons != 0)
+    return TRUE;
+  if (event && event_is_eraser_tool (event))
+    return TRUE;
+  return FALSE;
+}
+
+/* Treat anything other than the tip as a modifier: barrel buttons
+ * (BTN_STYLUS -> clutter 2, BTN_STYLUS2 -> 3, BTN_STYLUS3 -> 8) only
+ * drive erase mode, never a new stroke. Returns TRUE if the press was
+ * a barrel button (i.e. event should be consumed, not strokified). */
+static gboolean
+handle_tool_modifier_press (MetaAnnotationLayer *layer,
+                            const ClutterEvent  *event,
+                            gboolean             pressed)
+{
+  guint btn;
+
+  if (!clutter_event_get_device_tool (event))
+    return FALSE;
+
+  btn = clutter_event_get_button (event);
+  if (btn == CLUTTER_BUTTON_PRIMARY || btn == 0)
+    return FALSE;
+
+  /* Cap the bitmask at 32 so shifts stay defined. Libinput-reported
+   * clutter buttons top out at 12 in meta-seat-impl; this is just
+   * defensive. */
+  if (btn >= 32)
+    return TRUE;
+
+  if (pressed)
+    layer->pen_barrel_buttons |= (1u << btn);
+  else
+    layer->pen_barrel_buttons &= ~(1u << btn);
+  return TRUE;
 }
 
 /* Return TRUE and set *out if the event carries a pressure axis value. */
@@ -1286,7 +1377,8 @@ begin_stroke (MetaAnnotationLayer *layer, float stage_x, float stage_y,
 static void
 continue_stroke (MetaAnnotationLayer *layer, float stage_x, float stage_y,
                  gboolean pressure_known, float pressure,
-                 gboolean tilt_known, float tilt_factor)
+                 gboolean tilt_known, float tilt_factor,
+                 gboolean erase)
 {
   cairo_surface_t *target;
   float lx, ly;
@@ -1302,7 +1394,8 @@ continue_stroke (MetaAnnotationLayer *layer, float stage_x, float stage_y,
     draw_segment (layer, target,
                   layer->stroke_last_x, layer->stroke_last_y, lx, ly,
                   layer->last_pressure, p_end,
-                  layer->last_tilt_factor, t_end);
+                  layer->last_tilt_factor, t_end,
+                  erase);
 
   layer->stroke_last_x = lx;
   layer->stroke_last_y = ly;
@@ -1518,6 +1611,13 @@ meta_annotation_layer_handle_event (MetaAnnotationLayer *layer,
         /* Primary, or any press while a tool is present. */
         if (btn != CLUTTER_BUTTON_PRIMARY && !clutter_event_get_device_tool (event))
           return TRUE;
+
+        /* Pen barrel buttons toggle erase mode but never begin a stroke.
+         * The ongoing stroke (if any) picks up erase on its very next
+         * segment because continue_stroke re-reads erase_is_active each
+         * call. */
+        if (handle_tool_modifier_press (layer, event, TRUE))
+          return TRUE;
       }
       clutter_event_get_coords (event, &pos.x, &pos.y);
       begin_stroke (layer, pos.x, pos.y,
@@ -1530,6 +1630,7 @@ meta_annotation_layer_handle_event (MetaAnnotationLayer *layer,
       {
         gboolean pressure_tip = pressure_known && pressure > 0.0f;
         gboolean btn = pointer_has_draw_button (event);
+        gboolean erase = erase_is_active (layer, event);
 
         if (!layer->stroke_active && !btn && !pressure_tip)
           return TRUE;
@@ -1550,7 +1651,8 @@ meta_annotation_layer_handle_event (MetaAnnotationLayer *layer,
 
         continue_stroke (layer, pos.x, pos.y,
                          pressure_known, pressure,
-                         tilt_known, tilt_factor);
+                         tilt_known, tilt_factor,
+                         erase);
 
         /* Drifting past the tap radius invalidates the pending tap. */
         if (layer->pending_tap)
@@ -1567,11 +1669,16 @@ meta_annotation_layer_handle_event (MetaAnnotationLayer *layer,
       }
 
     case CLUTTER_BUTTON_RELEASE:
+      /* Barrel release: drop the erase modifier but do not end the
+       * ongoing stroke (the tip may still be down). */
+      if (handle_tool_modifier_press (layer, event, FALSE))
+        return TRUE;
       clutter_event_get_coords (event, &pos.x, &pos.y);
       if (layer->stroke_active)
         continue_stroke (layer, pos.x, pos.y,
                          pressure_known, pressure,
-                         tilt_known, tilt_factor);
+                         tilt_known, tilt_factor,
+                         erase_is_active (layer, event));
       note_tap_release (layer, pos.x, pos.y);
       end_stroke (layer);
       return TRUE;
@@ -1590,7 +1697,8 @@ meta_annotation_layer_handle_event (MetaAnnotationLayer *layer,
           clutter_event_get_coords (event, &pos.x, &pos.y);
           continue_stroke (layer, pos.x, pos.y,
                            pressure_known, pressure,
-                           tilt_known, tilt_factor);
+                           tilt_known, tilt_factor,
+                           erase_is_active (layer, event));
           if (layer->pending_tap)
             {
               float ddx = pos.x - layer->pending_tap_press_stage_x;
@@ -1606,7 +1714,8 @@ meta_annotation_layer_handle_event (MetaAnnotationLayer *layer,
       if (layer->stroke_active)
         continue_stroke (layer, pos.x, pos.y,
                          pressure_known, pressure,
-                         tilt_known, tilt_factor);
+                         tilt_known, tilt_factor,
+                         erase_is_active (layer, event));
       note_tap_release (layer, pos.x, pos.y);
       end_stroke (layer);
       return TRUE;
