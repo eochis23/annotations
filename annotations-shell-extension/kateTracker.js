@@ -354,60 +354,42 @@ class KateWindowTracker {
                 this._pollId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 500, () => {
                     this._pollTicks++;
                     const diag = {
-                        hypothesisId: 'H25-H28',
+                        hypothesisId: 'H28-v2',
                         pid: this.pid,
                         tick: this._pollTicks,
-                        qTextType: 'missing',
-                        textY: null,
-                        textErr: null,
-                        qValueType: 'missing',
+                        edIsText: null,
+                        edHasTextIface: null,
+                        edTextY: null,
+                        edTextErr: null,
+                        sbIsValue: null,
+                        sbHasValueIface: null,
                         sbVal: null,
-                        sbErr: null,
-                        edExtY: null,
-                        edExtErr: null,
-                        sbExtY: null,
-                        sbExtH: null,
+                        sbValErr: null,
                     };
                     try {
                         if (this.editor) {
-                            diag.qTextType = typeof this.editor.query_text;
-                            if (typeof this.editor.query_text === 'function') {
-                                const text = this.editor.query_text();
-                                diag.qTextType = text ? 'obj' : 'null';
-                                if (text) {
-                                    try {
-                                        const r = text.get_character_extents(0, Atspi.CoordType.WINDOW);
-                                        diag.textY = r ? r.y : 'rect-null';
-                                    } catch (e) { diag.textErr = String(e?.message ?? e).slice(0, 80); }
-                                }
+                            diag.edIsText = !!this.editor.is_text?.();
+                            const tIface = this.editor.get_text_iface?.();
+                            diag.edHasTextIface = !!tIface;
+                            if (tIface) {
+                                try {
+                                    const r = tIface.get_character_extents(0, Atspi.CoordType.WINDOW);
+                                    diag.edTextY = r ? r.y : 'rect-null';
+                                } catch (e) { diag.edTextErr = String(e?.message ?? e).slice(0, 80); }
                             }
                         }
-                    } catch (e) { diag.textErr = String(e?.message ?? e).slice(0, 80); }
+                    } catch (e) { diag.edTextErr = String(e?.message ?? e).slice(0, 80); }
                     try {
                         if (this.scrollbar) {
-                            diag.qValueType = typeof this.scrollbar.query_value;
-                            if (typeof this.scrollbar.query_value === 'function') {
-                                const val = this.scrollbar.query_value();
-                                diag.qValueType = val ? 'obj' : 'null';
-                                if (val) {
-                                    try { diag.sbVal = val.get_current_value(); }
-                                    catch (e) { diag.sbErr = String(e?.message ?? e).slice(0, 80); }
-                                }
+                            diag.sbIsValue = !!this.scrollbar.is_value?.();
+                            const vIface = this.scrollbar.get_value_iface?.();
+                            diag.sbHasValueIface = !!vIface;
+                            if (vIface) {
+                                try { diag.sbVal = vIface.get_current_value(); }
+                                catch (e) { diag.sbValErr = String(e?.message ?? e).slice(0, 80); }
                             }
                         }
-                    } catch (e) { diag.sbErr = String(e?.message ?? e).slice(0, 80); }
-                    try {
-                        if (this.editor) {
-                            const ex = this.editor.get_extents(Atspi.CoordType.WINDOW);
-                            diag.edExtY = ex ? ex.y : null;
-                        }
-                    } catch (e) { diag.edExtErr = String(e?.message ?? e).slice(0, 80); }
-                    try {
-                        if (this.scrollbar) {
-                            const sx = this.scrollbar.get_extents(Atspi.CoordType.WINDOW);
-                            if (sx) { diag.sbExtY = sx.y; diag.sbExtH = sx.height; }
-                        }
-                    } catch (e) {}
+                    } catch (e) { diag.sbValErr = String(e?.message ?? e).slice(0, 80); }
                     if (this._pollTicks <= 3 || this._pollTicks % 10 === 0) {
                         _agentDbg('KateWindowTracker.poll', 'probe', diag);
                     }
@@ -492,7 +474,11 @@ class KateWindowTracker {
     _captureBaseline() {
         if (!this.editor || this.charBaseYRel !== null) return;
         try {
-            const text = this.editor.query_text?.();
+            /* gjs/Atspi exposes the Text interface as
+             * AtspiAccessible.get_text_iface(); the older query_text()
+             * name isn't bound here (confirmed runtime: every poll showed
+             * qTextType:'undefined' for query_text on Kate's editor). */
+            const text = this.editor.get_text_iface?.();
             if (!text) return;
             const rect = text.get_character_extents(0, Atspi.CoordType.WINDOW);
             const ed = safeExtents(this.editor, Atspi.CoordType.WINDOW);
@@ -548,7 +534,7 @@ class KateWindowTracker {
 
         if (this.charBaseYRel !== null) {
             try {
-                const text = this.editor.query_text?.();
+                const text = this.editor.get_text_iface?.();
                 if (text) {
                     const rect = text.get_character_extents(0, Atspi.CoordType.WINDOW);
                     const ed = safeExtents(this.editor, Atspi.CoordType.WINDOW);
@@ -569,9 +555,9 @@ class KateWindowTracker {
 
         if (!ok && this.scrollbar) {
             try {
-                const v = this.scrollbar.query_value?.();
+                const v = this.scrollbar.get_value_iface?.();
                 if (v) {
-                    sy = Math.round(v.current_value);
+                    sy = Math.round(v.get_current_value());
                     ok = true;
                 }
             } catch (e) { /* no Value interface? give up silently */ }
