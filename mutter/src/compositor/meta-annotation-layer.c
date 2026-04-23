@@ -79,6 +79,19 @@ typedef struct _Stroke
    * possible stroke width so it's safe to use as a broad-phase reject
    * box for the erase hit-test. Updated incrementally on append. */
   float bbox_min_x, bbox_min_y, bbox_max_x, bbox_max_y;
+
+  /* When TRUE, point coordinates are in *editor content space* (x
+   * relative to the containing WindowInk's editor region origin, y in
+   * document pixels inclusive of scroll offset at draw time). The
+   * rasterizer translates these back to window-local pixels using the
+   * WindowInk's current editor_origin + scroll before painting, and
+   * applies a clip to the editor region so scrolled ink never bleeds
+   * out onto neighboring chrome (tabs, terminal pane, toolbars).
+   *
+   * When FALSE, point coordinates are in target-surface local space
+   * (window-local for WindowInk, stage-local for unattached_strokes),
+   * matching pre-scroll-follow behavior. */
+  gboolean follow_scroll;
 } Stroke;
 
 typedef struct _WindowInk
@@ -89,6 +102,22 @@ typedef struct _WindowInk
   int width, height;
   gulong pos_id, size_id, min_id, ws_id, unm_id;
   MetaAnnotationLayer *layer;
+
+  /* Editor hot-zone published by an external tracker (e.g. the shell
+   * extension watching Kate via AT-SPI). Coordinates are window-local
+   * logical pixels. Strokes whose first point lands inside this rect
+   * are stored in editor content space and move with scroll updates;
+   * strokes outside stay pinned to the window as before. When
+   * has_editor_region is FALSE, behavior is identical to pre-scroll
+   * builds: no follow-scroll strokes are ever created on this window. */
+  gboolean has_editor_region;
+  float editor_x, editor_y, editor_w, editor_h;
+
+  /* Current scroll offset in document pixels. Added at draw time,
+   * subtracted at render time so a follow-scroll point stored at
+   * content (cx, cy) renders at window-local (cx + editor_x - scroll_x,
+   * cy + editor_y - scroll_y). */
+  float scroll_x, scroll_y;
 } WindowInk;
 
 struct _MetaAnnotationLayer
@@ -132,6 +161,15 @@ struct _MetaAnnotationLayer
    * storage is thrown away (anchor change, window unmanage, clear,
    * resize). */
   Stroke *current_stroke;
+
+  /* Cached "this stroke's InkPoints should be stored in editor content
+   * space" decision, taken once at begin_stroke from the press-time
+   * editor region + scroll offsets. Reused by append_ink_point so a
+   * Stroke that gets re-seeded mid-drag (after a brief erase flip)
+   * keeps the same follow-scroll semantics as the stroke it's
+   * continuing. Never mutated mid-stroke: a scroll event arriving
+   * mid-drag ends the stroke rather than half-converting coordinates. */
+  gboolean stroke_follow_scroll;
 
   /* Bitmask of currently-held pen barrel buttons (tool events with a
    * non-primary clutter button, e.g. BTN_STYLUS -> 2, BTN_STYLUS2 -> 3,
@@ -327,6 +365,7 @@ stroke_new (const float rgba[4])
     }
   s->bbox_min_x = s->bbox_min_y =  G_MAXFLOAT;
   s->bbox_max_x = s->bbox_max_y = -G_MAXFLOAT;
+  s->follow_scroll = FALSE;
   return s;
 }
 
@@ -368,22 +407,26 @@ strokes_clear (GPtrArray *strokes)
     g_ptr_array_set_size (strokes, 0);
 }
 
-/* Forward decl for rasterization helpers used by erase. */
-static void draw_segment_full (cairo_surface_t *target,
-                               const float      rgba[4],
-                               float x1, float y1, float x2, float y2,
-                               float p1, float p2,
-                               float tilt1, float tilt2,
-                               gboolean erase);
+/* Forward decls for rasterization helpers used by erase. */
+static void draw_segment_on_cr (cairo_t         *cr,
+                                const float      rgba[4],
+                                float x1, float y1, float x2, float y2,
+                                float p1, float p2,
+                                float tilt1, float tilt2,
+                                gboolean erase);
 
-/* Paint one stored Stroke into `target` using the stroke's color. */
+/* Paint one stored Stroke onto an already-configured cairo_t. The
+ * caller is responsible for any clip / translate the stroke needs
+ * (non-follow strokes: none; follow strokes: clip to editor region,
+ * translate by editor_origin - scroll). Never creates its own cairo_t
+ * so a single shared context can paint many strokes in a batch. */
 static void
-rasterize_stroke (cairo_surface_t *target, Stroke *s)
+rasterize_stroke_on_cr (cairo_t *cr, Stroke *s)
 {
   guint n;
   guint i;
 
-  if (!target || !s || !s->points)
+  if (!cr || !s || !s->points)
     return;
 
   n = s->points->len;
@@ -393,11 +436,11 @@ rasterize_stroke (cairo_surface_t *target, Stroke *s)
   if (n == 1)
     {
       InkPoint *p = &g_array_index (s->points, InkPoint, 0);
-      draw_segment_full (target, s->rgba,
-                         p->x, p->y, p->x, p->y,
-                         p->pressure, p->pressure,
-                         p->tilt_factor, p->tilt_factor,
-                         FALSE);
+      draw_segment_on_cr (cr, s->rgba,
+                          p->x, p->y, p->x, p->y,
+                          p->pressure, p->pressure,
+                          p->tilt_factor, p->tilt_factor,
+                          FALSE);
       return;
     }
 
@@ -405,20 +448,32 @@ rasterize_stroke (cairo_surface_t *target, Stroke *s)
     {
       InkPoint *a = &g_array_index (s->points, InkPoint, i - 1);
       InkPoint *b = &g_array_index (s->points, InkPoint, i);
-      draw_segment_full (target, s->rgba,
-                         a->x, a->y, b->x, b->y,
-                         a->pressure, b->pressure,
-                         a->tilt_factor, b->tilt_factor,
-                         FALSE);
+      draw_segment_on_cr (cr, s->rgba,
+                          a->x, a->y, b->x, b->y,
+                          a->pressure, b->pressure,
+                          a->tilt_factor, b->tilt_factor,
+                          FALSE);
     }
 }
 
 /* Clear target then paint every stroke in order. Used after erase
- * deletes one or more strokes from the list. */
+ * deletes one or more strokes, after a window resize / stage resize
+ * (the surface is freshly allocated and empty), and any time a scroll
+ * update moves editor-tracked ink.
+ *
+ * `ink` is the owning WindowInk if the target is a window surface; it
+ * supplies the editor region + current scroll offsets used to render
+ * follow-scroll strokes. Pass NULL for the unattached (stage-sized)
+ * surface, which never has follow-scroll strokes. */
 static void
-rasterize_all_strokes (cairo_surface_t *target, GPtrArray *strokes)
+rasterize_all_strokes_with_ink (cairo_surface_t *target,
+                                GPtrArray       *strokes,
+                                WindowInk       *ink)
 {
   guint i;
+  cairo_t *cr_normal = NULL;
+  cairo_t *cr_follow = NULL;
+  gboolean has_region;
 
   if (!target)
     return;
@@ -437,10 +492,73 @@ rasterize_all_strokes (cairo_surface_t *target, GPtrArray *strokes)
       return;
     }
 
+  has_region = ink && ink->has_editor_region &&
+               ink->editor_w > 0.0f && ink->editor_h > 0.0f;
+
+  /* Single shared context for non-follow strokes: identity transform,
+   * no clip, paints the full window-local surface. */
+  cr_normal = cairo_create (target);
+
+  /* Single shared context for follow strokes: clipped to the editor
+   * region (so scrolled ink can't leak onto tabs / terminal / title
+   * bar) and translated so a stored content-space point at (cx, cy)
+   * maps to window-local (cx + editor_x - scroll_x, cy + editor_y -
+   * scroll_y). Only built if there's at least one follow stroke and
+   * a region to render into. Otherwise follow strokes are treated as
+   * invisible until the tracker republishes a region -- preferable to
+   * painting them at stale / unknown coordinates. */
+  if (has_region)
+    {
+      for (i = 0; i < strokes->len; i++)
+        {
+          Stroke *s = g_ptr_array_index (strokes, i);
+          if (s && s->follow_scroll)
+            {
+              cr_follow = cairo_create (target);
+              cairo_rectangle (cr_follow,
+                               ink->editor_x, ink->editor_y,
+                               ink->editor_w, ink->editor_h);
+              cairo_clip (cr_follow);
+              cairo_translate (cr_follow,
+                               ink->editor_x - ink->scroll_x,
+                               ink->editor_y - ink->scroll_y);
+              break;
+            }
+        }
+    }
+
   for (i = 0; i < strokes->len; i++)
-    rasterize_stroke (target, g_ptr_array_index (strokes, i));
+    {
+      Stroke *s = g_ptr_array_index (strokes, i);
+      if (!s)
+        continue;
+      if (s->follow_scroll)
+        {
+          if (cr_follow)
+            rasterize_stroke_on_cr (cr_follow, s);
+          /* else: follow stroke with no region -- skip, don't paint
+           * at stale coordinates. */
+        }
+      else
+        {
+          rasterize_stroke_on_cr (cr_normal, s);
+        }
+    }
+
+  if (cr_follow)
+    cairo_destroy (cr_follow);
+  cairo_destroy (cr_normal);
 
   cairo_surface_flush (target);
+}
+
+/* Thin compat wrapper: callers that don't have a WindowInk (the
+ * unattached / stage-sized surface) pass NULL so no follow-scroll
+ * machinery runs. */
+static void
+rasterize_all_strokes (cairo_surface_t *target, GPtrArray *strokes)
+{
+  rasterize_all_strokes_with_ink (target, strokes, NULL);
 }
 
 static void
@@ -691,12 +809,17 @@ window_ink_resize_to_frame (WindowInk *ink)
   ink->width = fr.width;
   ink->height = fr.height;
 
-  /* Stored strokes are in window-local coordinates and remain valid
-   * across a resize. Re-rasterize into the fresh (and differently
-   * sized) surface instead of blitting pixels, so ink that now falls
-   * inside the new frame bounds is preserved and anything outside
-   * is clipped by cairo naturally. */
-  rasterize_all_strokes (ink->surface, ink->strokes);
+  /* Stored strokes are in either window-local (non-follow) or editor
+   * content space (follow-scroll) and remain valid across a resize.
+   * Re-rasterize into the fresh (and differently sized) surface
+   * instead of blitting pixels, so ink that now falls inside the new
+   * frame bounds is preserved and anything outside is clipped by
+   * cairo naturally. Follow-scroll strokes reuse the current editor
+   * region + scroll; if the tracker subsequently republishes a new
+   * region (e.g. because the window resize moved tool views around),
+   * meta_annotation_layer_set_window_editor_region will re-render
+   * them again. */
+  rasterize_all_strokes_with_ink (ink->surface, ink->strokes, ink);
 }
 
 static void
@@ -1307,6 +1430,158 @@ meta_annotation_layer_set_color (MetaAnnotationLayer *layer,
   layer->rgba[3] = (float) a;
 }
 
+/* --------------- Scroll-following --------------- */
+
+/* Collect every managed window with this PID. Used by the PID-keyed
+ * scroll-following API so a tracker can say "Kate (pid 1234) scrolled
+ * by N pixels" without needing to know how many top-level windows the
+ * process has open. Caller owns the returned GSList, but not the
+ * MetaWindow entries (those stay owned by the display). */
+static GSList *
+collect_windows_for_pid (MetaAnnotationLayer *layer, guint32 pid)
+{
+  GList *all_windows;
+  GList *wl;
+  GSList *out = NULL;
+
+  if (!layer->display || pid == 0)
+    return NULL;
+
+  all_windows = meta_display_list_all_windows (layer->display);
+  for (wl = all_windows; wl; wl = wl->next)
+    {
+      MetaWindow *w = wl->data;
+      if (w && (guint32) meta_window_get_pid (w) == pid)
+        out = g_slist_prepend (out, w);
+    }
+  g_list_free (all_windows);
+  return out;
+}
+
+void
+meta_annotation_layer_set_window_editor_region (MetaAnnotationLayer *layer,
+                                                guint32             pid,
+                                                int                 x,
+                                                int                 y,
+                                                int                 w,
+                                                int                 h)
+{
+  GSList *windows;
+  GSList *l;
+  gboolean clearing = (w <= 0 || h <= 0);
+
+  g_return_if_fail (layer != NULL);
+
+  windows = collect_windows_for_pid (layer, pid);
+  if (!windows)
+    return;
+
+  for (l = windows; l; l = l->next)
+    {
+      MetaWindow *win = l->data;
+      WindowInk *ink;
+      gboolean had_region;
+
+      /* Allocate the WindowInk eagerly so the region is in place
+       * before the user's first stroke on this window. Without this,
+       * the first press would bypass the follow-scroll hit-test. */
+      ink = ensure_window_ink (layer, win);
+      if (!ink)
+        continue;
+
+      had_region = ink->has_editor_region;
+
+      if (clearing)
+        {
+          ink->has_editor_region = FALSE;
+          ink->editor_x = ink->editor_y = 0.0f;
+          ink->editor_w = ink->editor_h = 0.0f;
+        }
+      else
+        {
+          ink->has_editor_region = TRUE;
+          ink->editor_x = (float) x;
+          ink->editor_y = (float) y;
+          ink->editor_w = (float) w;
+          ink->editor_h = (float) h;
+        }
+
+      /* Any pre-existing follow-scroll strokes now need to be
+       * re-rendered against the new region (clip / offset changed);
+       * if we just cleared the region they'll render invisibly until
+       * the tracker republishes one. Non-follow strokes don't move. */
+      if (ink->strokes && (had_region || ink->has_editor_region))
+        rasterize_all_strokes_with_ink (ink->surface, ink->strokes, ink);
+
+      /* A stroke in flight on this window would have made its
+       * content/window-space decision against the OLD region. Seal
+       * it off rather than silently half-converting mid-stroke. */
+      if (layer->stroke_active && layer->stroke_anchor == win)
+        {
+          layer->stroke_active = FALSE;
+          layer->current_stroke = NULL;
+          layer->stroke_follow_scroll = FALSE;
+          set_stroke_anchor (layer, NULL);
+        }
+    }
+
+  g_slist_free (windows);
+  schedule_recompose (layer);
+}
+
+void
+meta_annotation_layer_set_window_scroll (MetaAnnotationLayer *layer,
+                                         guint32             pid,
+                                         int                 scroll_x,
+                                         int                 scroll_y)
+{
+  GSList *windows;
+  GSList *l;
+
+  g_return_if_fail (layer != NULL);
+
+  windows = collect_windows_for_pid (layer, pid);
+  if (!windows)
+    return;
+
+  for (l = windows; l; l = l->next)
+    {
+      MetaWindow *win = l->data;
+      WindowInk *ink;
+      float new_sx = (float) scroll_x;
+      float new_sy = (float) scroll_y;
+
+      ink = g_hash_table_lookup (layer->per_window, win);
+      if (!ink)
+        continue;
+
+      if (ink->scroll_x == new_sx && ink->scroll_y == new_sy)
+        continue;
+
+      ink->scroll_x = new_sx;
+      ink->scroll_y = new_sy;
+
+      /* An in-flight follow-scroll stroke on this window would mix
+       * pre-scroll and post-scroll coords; end it rather than
+       * produce a smeared line. Non-follow in-flight strokes stay
+       * alive: they don't care about scroll at all. */
+      if (layer->stroke_active && layer->stroke_anchor == win &&
+          layer->stroke_follow_scroll)
+        {
+          layer->stroke_active = FALSE;
+          layer->current_stroke = NULL;
+          layer->stroke_follow_scroll = FALSE;
+          set_stroke_anchor (layer, NULL);
+        }
+
+      if (ink->strokes)
+        rasterize_all_strokes_with_ink (ink->surface, ink->strokes, ink);
+    }
+
+  g_slist_free (windows);
+  schedule_recompose (layer);
+}
+
 /* --------------- Drawing --------------- */
 
 static float
@@ -1320,24 +1595,28 @@ pressure_to_width_multiplier (float pressure)
   return sqrtf (pressure);
 }
 
-/* Paint (or erase) one stroke segment into `target`. Color is taken
- * from the explicit rgba argument so rasterize_stroke can replay old
+/* Paint (or erase) one stroke segment onto `cr`. Color is taken from
+ * the explicit rgba argument so rasterize_stroke_on_cr can replay old
  * strokes with their original color even after the dock's current
- * color has changed. */
+ * color has changed. Does not call cairo_create / cairo_destroy:
+ * callers that want batched rendering (rasterize_all_strokes_with_ink,
+ * live drawing in continue_stroke) own the lifetime of `cr`, which
+ * lets them install a single clip + translate for an entire stroke
+ * set. Uses cairo_save / cairo_restore so source, operator, and path
+ * state changes here don't leak back to the caller. */
 static void
-draw_segment_full (cairo_surface_t *target,
-                   const float      rgba[4],
-                   float            x1,
-                   float            y1,
-                   float            x2,
-                   float            y2,
-                   float            p1,
-                   float            p2,
-                   float            tilt1,
-                   float            tilt2,
-                   gboolean         erase)
+draw_segment_on_cr (cairo_t         *cr,
+                    const float      rgba[4],
+                    float            x1,
+                    float            y1,
+                    float            x2,
+                    float            y2,
+                    float            p1,
+                    float            p2,
+                    float            tilt1,
+                    float            tilt2,
+                    gboolean         erase)
 {
-  cairo_t *cr;
   float dx = x2 - x1;
   float dy = y2 - y1;
   float len2 = dx * dx + dy * dy;
@@ -1345,10 +1624,10 @@ draw_segment_full (cairo_surface_t *target,
   float w1 = ANNOT_BASE_WIDTH * pressure_to_width_multiplier (p1) * tilt1 * scale;
   float w2 = ANNOT_BASE_WIDTH * pressure_to_width_multiplier (p2) * tilt2 * scale;
 
-  if (!target)
+  if (!cr)
     return;
 
-  cr = cairo_create (target);
+  cairo_save (cr);
   if (erase)
     {
       cairo_set_source_rgba (cr, 0.0, 0.0, 0.0, 1.0);
@@ -1388,9 +1667,7 @@ draw_segment_full (cairo_surface_t *target,
       cairo_arc (cr, x2, y2, w2 * 0.5f, 0.0f, (float) (2.0 * M_PI));
       cairo_fill (cr);
     }
-  cairo_destroy (cr);
-
-  cairo_surface_flush (target);
+  cairo_restore (cr);
 }
 
 /* --------------- Event handling --------------- */
@@ -1661,23 +1938,74 @@ stroke_hit_by_eraser (Stroke *s,
 /* Walk strokes back-to-front, removing any hit by the eraser segment.
  * Reverse order because g_ptr_array_remove_index (not _fast) keeps the
  * stacking order intact so re-rasterization is identical for the
- * survivors. Returns the count removed. */
+ * survivors. Returns the count removed.
+ *
+ * Eraser segment endpoints (ax, ay) -> (bx, by) are in window-local
+ * (surface-local) coords. `ink` is the WindowInk hosting these
+ * strokes, or NULL for the unattached (stage-sized) surface.
+ *
+ * Follow-scroll strokes store their points in editor content space, so
+ * to hit-test them we translate the eraser segment by the same
+ * transform the rasterizer uses to *render* those points:
+ *   window_x = content_x + editor_x - scroll_x
+ * -> content_x = window_x - editor_x + scroll_x
+ * and symmetrically for y. We also skip follow-scroll strokes
+ * entirely if both eraser endpoints are outside the editor region, so
+ * the user can't delete invisible ink by flailing the eraser over the
+ * terminal pane. */
 static guint
 erase_strokes_hit_by_segment (GPtrArray *strokes,
                               float ax, float ay,
                               float bx, float by,
-                              float eraser_radius)
+                              float eraser_radius,
+                              WindowInk *ink)
 {
   guint removed = 0;
   guint i;
+  gboolean has_region;
+  gboolean eraser_in_editor = FALSE;
+  float cax = 0, cay = 0, cbx = 0, cby = 0;
 
   if (!strokes)
     return 0;
 
+  has_region = ink && ink->has_editor_region &&
+               ink->editor_w > 0.0f && ink->editor_h > 0.0f;
+
+  if (has_region)
+    {
+      float ex = ink->editor_x, ey = ink->editor_y;
+      float ew = ink->editor_w, eh = ink->editor_h;
+      gboolean a_in = (ax >= ex && ax < ex + ew && ay >= ey && ay < ey + eh);
+      gboolean b_in = (bx >= ex && bx < ex + ew && by >= ey && by < ey + eh);
+      eraser_in_editor = a_in || b_in;
+
+      cax = ax - ex + ink->scroll_x;
+      cay = ay - ey + ink->scroll_y;
+      cbx = bx - ex + ink->scroll_x;
+      cby = by - ey + ink->scroll_y;
+    }
+
   for (i = strokes->len; i-- > 0;)
     {
       Stroke *s = g_ptr_array_index (strokes, i);
-      if (stroke_hit_by_eraser (s, ax, ay, bx, by, eraser_radius))
+      gboolean hit;
+
+      if (!s)
+        continue;
+
+      if (s->follow_scroll)
+        {
+          if (!has_region || !eraser_in_editor)
+            continue;
+          hit = stroke_hit_by_eraser (s, cax, cay, cbx, cby, eraser_radius);
+        }
+      else
+        {
+          hit = stroke_hit_by_eraser (s, ax, ay, bx, by, eraser_radius);
+        }
+
+      if (hit)
         {
           g_ptr_array_remove_index (strokes, i);
           removed++;
@@ -1691,11 +2019,14 @@ erase_strokes_hit_by_segment (GPtrArray *strokes,
 /* Append a point to the currently-in-flight ink stroke, creating a
  * fresh Stroke in the target buffer's list if there isn't one. Used
  * both by begin_stroke (to seed the first point) and continue_stroke
- * (to seed on ink-after-erase mode flips). */
+ * (to seed on ink-after-erase mode flips). `follow_scroll` is only
+ * consulted when a new Stroke is created here; it must match the
+ * coordinate space of `pt`. */
 static void
 append_ink_point (MetaAnnotationLayer *layer,
                   GPtrArray           *strokes,
-                  const InkPoint      *pt)
+                  const InkPoint      *pt,
+                  gboolean             follow_scroll)
 {
   if (!strokes || !pt)
     return;
@@ -1703,6 +2034,7 @@ append_ink_point (MetaAnnotationLayer *layer,
   if (!layer->current_stroke)
     {
       Stroke *s = stroke_new (layer->rgba);
+      s->follow_scroll = follow_scroll;
       g_ptr_array_add (strokes, s);
       layer->current_stroke = s;
     }
@@ -1718,12 +2050,14 @@ begin_stroke (MetaAnnotationLayer *layer, float stage_x, float stage_y,
   MetaWindow *anchor;
   cairo_surface_t *target;
   GPtrArray *strokes;
+  WindowInk *anchor_ink;
 
   anchor = pick_anchor_window (layer, stage_x, stage_y);
   set_stroke_anchor (layer, anchor);
   /* Defensive: this Stroke pointer, if any, belonged to the previous
    * anchor's list and is meaningless now. */
   layer->current_stroke = NULL;
+  layer->stroke_follow_scroll = FALSE;
 
   if (anchor)
     ensure_window_ink (layer, anchor);
@@ -1737,6 +2071,26 @@ begin_stroke (MetaAnnotationLayer *layer, float stage_x, float stage_y,
     (pressure_known && pressure > 0.0f) ? pressure : 1.0f;
   layer->last_tilt_factor = tilt_known ? tilt_factor : 1.0f;
 
+  /* Decide here, once, whether this stroke lives in editor content
+   * space. The decision is locked for the duration of the press:
+   * mid-stroke scroll events call end_stroke (see
+   * meta_annotation_layer_set_window_scroll) so coordinates can't
+   * silently change meaning between one InkPoint and the next. */
+  anchor_ink = (anchor)
+    ? g_hash_table_lookup (layer->per_window, anchor)
+    : NULL;
+  if (!erase && anchor_ink && anchor_ink->has_editor_region &&
+      anchor_ink->editor_w > 0.0f && anchor_ink->editor_h > 0.0f)
+    {
+      float px = layer->stroke_last_x;
+      float py = layer->stroke_last_y;
+      if (px >= anchor_ink->editor_x &&
+          px <  anchor_ink->editor_x + anchor_ink->editor_w &&
+          py >= anchor_ink->editor_y &&
+          py <  anchor_ink->editor_y + anchor_ink->editor_h)
+        layer->stroke_follow_scroll = TRUE;
+    }
+
   if (erase)
     return;
 
@@ -1746,14 +2100,20 @@ begin_stroke (MetaAnnotationLayer *layer, float stage_x, float stage_y,
 
   /* Seed a new ink Stroke with the initial point so a single press
    * without any motion still renders as a dot after future
-   * re-rasterizations. */
+   * re-rasterizations. In content space for follow strokes, in
+   * window-local for everything else. */
   {
     InkPoint p = {
       .x = layer->stroke_last_x, .y = layer->stroke_last_y,
       .pressure = layer->last_pressure,
       .tilt_factor = layer->last_tilt_factor,
     };
-    append_ink_point (layer, strokes, &p);
+    if (layer->stroke_follow_scroll && anchor_ink)
+      {
+        p.x = layer->stroke_last_x - anchor_ink->editor_x + anchor_ink->scroll_x;
+        p.y = layer->stroke_last_y - anchor_ink->editor_y + anchor_ink->scroll_y;
+      }
+    append_ink_point (layer, strokes, &p, layer->stroke_follow_scroll);
   }
 }
 
@@ -1765,6 +2125,7 @@ continue_stroke (MetaAnnotationLayer *layer, float stage_x, float stage_y,
 {
   cairo_surface_t *target;
   GPtrArray *strokes;
+  WindowInk *anchor_ink;
   float lx, ly;
   float p_end;
   float t_end;
@@ -1773,6 +2134,10 @@ continue_stroke (MetaAnnotationLayer *layer, float stage_x, float stage_y,
   convert_stage_to_local (layer, stage_x, stage_y, &lx, &ly);
   p_end = pressure_known ? pressure : layer->last_pressure;
   t_end = tilt_known ? tilt_factor : layer->last_tilt_factor;
+
+  anchor_ink = (layer->stroke_anchor)
+    ? g_hash_table_lookup (layer->per_window, layer->stroke_anchor)
+    : NULL;
 
   if (erase)
     {
@@ -1796,43 +2161,69 @@ continue_stroke (MetaAnnotationLayer *layer, float stage_x, float stage_y,
           if (erase_strokes_hit_by_segment (strokes,
                                             layer->stroke_last_x,
                                             layer->stroke_last_y,
-                                            lx, ly, r) > 0)
+                                            lx, ly, r,
+                                            anchor_ink) > 0)
             {
-              rasterize_all_strokes (target, strokes);
+              rasterize_all_strokes_with_ink (target, strokes, anchor_ink);
             }
         }
     }
   else if (target && strokes)
     {
-      /* Draw the segment into the surface for live feedback, then
-       * record the endpoint so a later erase-and-re-rasterize pass
-       * reproduces the stroke exactly. */
-      draw_segment_full (target, layer->rgba,
-                         layer->stroke_last_x, layer->stroke_last_y,
-                         lx, ly,
-                         layer->last_pressure, p_end,
-                         layer->last_tilt_factor, t_end,
-                         FALSE);
-
-      /* If current_stroke is NULL here, we're just resuming ink after
-       * an erase sub-segment; seed with the previous endpoint so the
-       * new Stroke has both ends of this segment. */
-      if (!layer->current_stroke)
-        {
-          InkPoint p_prev = {
-            .x = layer->stroke_last_x, .y = layer->stroke_last_y,
-            .pressure = layer->last_pressure,
-            .tilt_factor = layer->last_tilt_factor,
-          };
-          append_ink_point (layer, strokes, &p_prev);
-        }
+      /* Draw the segment into the surface for live feedback at the
+       * pen's current on-screen position. Coordinates are window-local
+       * here regardless of follow-scroll: that's where the user's pen
+       * visibly is right now, and no scroll change can have happened
+       * between begin_stroke and this motion event (a scroll ends the
+       * stroke). The stored InkPoint below *is* converted to content
+       * space for follow-scroll strokes so later re-rasterizes after
+       * a scroll reproduce the stroke in the right place. */
       {
-        InkPoint p_new = {
-          .x = lx, .y = ly,
-          .pressure = p_end,
-          .tilt_factor = t_end,
-        };
-        append_ink_point (layer, strokes, &p_new);
+        cairo_t *cr = cairo_create (target);
+        draw_segment_on_cr (cr, layer->rgba,
+                            layer->stroke_last_x, layer->stroke_last_y,
+                            lx, ly,
+                            layer->last_pressure, p_end,
+                            layer->last_tilt_factor, t_end,
+                            FALSE);
+        cairo_destroy (cr);
+        cairo_surface_flush (target);
+      }
+
+      /* Helper: window-local (wx, wy) -> stored coords matching
+       * layer->stroke_follow_scroll. */
+      {
+        float follow_dx = 0.0f, follow_dy = 0.0f;
+        if (layer->stroke_follow_scroll && anchor_ink)
+          {
+            follow_dx = anchor_ink->scroll_x - anchor_ink->editor_x;
+            follow_dy = anchor_ink->scroll_y - anchor_ink->editor_y;
+          }
+
+        /* If current_stroke is NULL here, we're just resuming ink
+         * after an erase sub-segment; seed with the previous endpoint
+         * so the new Stroke has both ends of this segment. */
+        if (!layer->current_stroke)
+          {
+            InkPoint p_prev = {
+              .x = layer->stroke_last_x + follow_dx,
+              .y = layer->stroke_last_y + follow_dy,
+              .pressure = layer->last_pressure,
+              .tilt_factor = layer->last_tilt_factor,
+            };
+            append_ink_point (layer, strokes, &p_prev,
+                              layer->stroke_follow_scroll);
+          }
+        {
+          InkPoint p_new = {
+            .x = lx + follow_dx,
+            .y = ly + follow_dy,
+            .pressure = p_end,
+            .tilt_factor = t_end,
+          };
+          append_ink_point (layer, strokes, &p_new,
+                            layer->stroke_follow_scroll);
+        }
       }
     }
 
@@ -1848,6 +2239,7 @@ end_stroke (MetaAnnotationLayer *layer)
 {
   layer->stroke_active = FALSE;
   layer->current_stroke = NULL;
+  layer->stroke_follow_scroll = FALSE;
   set_stroke_anchor (layer, NULL);
   schedule_recompose (layer);
 }

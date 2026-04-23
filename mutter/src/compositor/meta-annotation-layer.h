@@ -68,6 +68,28 @@ const char *meta_annotation_layer_pick_chrome_region (MetaAnnotationLayer *layer
                                                       float                x,
                                                       float                y);
 
+/* Scroll-following: the shell extension registers a "content-tracked"
+ * editor region per matching PID, then pushes scroll updates as the
+ * user scrolls the document. Strokes whose first point lands inside
+ * the region get stored in editor content space and move with scroll;
+ * strokes outside stay pinned to the window surface (existing
+ * behavior). Calling SetWindowEditorRegion with w=0 or h=0 clears it;
+ * unknown PIDs are no-ops. */
+
+META_EXPORT
+void meta_annotation_layer_set_window_editor_region (MetaAnnotationLayer *layer,
+                                                     guint32              pid,
+                                                     int                  x,
+                                                     int                  y,
+                                                     int                  w,
+                                                     int                  h);
+
+META_EXPORT
+void meta_annotation_layer_set_window_scroll (MetaAnnotationLayer *layer,
+                                              guint32              pid,
+                                              int                  scroll_x,
+                                              int                  scroll_y);
+
 /* Per-stroke "press consumed by chrome" tracking, used by the compositor
  * routing path so motion events arriving between a chrome press and its
  * release don't open an ink stroke if the user drags off the dock. */

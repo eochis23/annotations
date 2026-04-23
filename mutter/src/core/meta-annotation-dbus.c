@@ -77,6 +77,25 @@ handle_method_call (GDBusConnection       *connection,
       meta_annotation_layer_set_paused (dbus->layer, paused);
       g_dbus_method_invocation_return_value (invocation, NULL);
     }
+  else if (g_strcmp0 (method_name, "SetWindowEditorRegion") == 0)
+    {
+      guint32 pid;
+      gint32 x, y, w, h;
+
+      g_variant_get (parameters, "(uiiii)", &pid, &x, &y, &w, &h);
+      meta_annotation_layer_set_window_editor_region (dbus->layer,
+                                                      pid, x, y, w, h);
+      g_dbus_method_invocation_return_value (invocation, NULL);
+    }
+  else if (g_strcmp0 (method_name, "SetWindowScroll") == 0)
+    {
+      guint32 pid;
+      gint32 sx, sy;
+
+      g_variant_get (parameters, "(uii)", &pid, &sx, &sy);
+      meta_annotation_layer_set_window_scroll (dbus->layer, pid, sx, sy);
+      g_dbus_method_invocation_return_value (invocation, NULL);
+    }
   else
     {
       g_dbus_method_invocation_return_error (invocation,
@@ -105,6 +124,18 @@ static const gchar introspection_xml[] =
   "    <method name='ClearChromeRegions'/>"
   "    <method name='SetPaused'>"
   "      <arg type='b' name='paused' direction='in'/>"
+  "    </method>"
+  "    <method name='SetWindowEditorRegion'>"
+  "      <arg type='u' name='pid' direction='in'/>"
+  "      <arg type='i' name='x' direction='in'/>"
+  "      <arg type='i' name='y' direction='in'/>"
+  "      <arg type='i' name='w' direction='in'/>"
+  "      <arg type='i' name='h' direction='in'/>"
+  "    </method>"
+  "    <method name='SetWindowScroll'>"
+  "      <arg type='u' name='pid' direction='in'/>"
+  "      <arg type='i' name='scroll_x' direction='in'/>"
+  "      <arg type='i' name='scroll_y' direction='in'/>"
   "    </method>"
   "    <signal name='RegionActivated'>"
   "      <arg type='s' name='id'/>"
