@@ -235,6 +235,14 @@ RegionActivated routing.
 - Three quick pen/touch taps on the same window within 500 ms clear
   just that window's ink; four quick taps within 750 ms (any
   combination of windows or the desktop) clear every window's ink.
+- Holding any pen barrel button puts the stroke path in erase mode:
+  segments render with `CAIRO_OPERATOR_CLEAR` at 2x the ink width, so
+  a held-barrel drag scrubs ink off the window it lands on (or off
+  the unattached surface over the desktop). Releasing the barrel
+  switches back to ink on the very next segment; the tip never has
+  to lift. Using the pen's flip-side eraser tool triggers the same
+  erase mode even without a barrel press. Barrel presses over the
+  dock are silently consumed (no color/clear activation).
 
 ## Known limitations / out of scope
 
