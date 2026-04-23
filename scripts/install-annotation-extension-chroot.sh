@@ -24,6 +24,15 @@ sudo tee "$MP/etc/dconf/db/local.d/99-annotation-extension" >/dev/null <<'EOF'
 # If you already use enabled-extensions in another fragment, merge this UUID there.
 [org/gnome/shell]
 enabled-extensions=['annotation@annotations.local']
+
+# Qt applications (Kate in particular) only expose their AT-SPI accessibility
+# tree when the GNOME toolkit-accessibility flag is on. Without this the
+# KateTrackerManager tree walk finds 0 TEXT nodes inside Kate and
+# scroll-following annotations silently do nothing. Enabling it here is
+# necessary for the annotation extension's AT-SPI features to work; GNOME
+# apps remain unaffected because they populate the tree regardless.
+[org/gnome/desktop/interface]
+toolkit-accessibility=true
 EOF
 
 sudo mkdir -p "$MP/etc/dconf/db/gdm.d"

@@ -223,6 +223,17 @@ class KateWindowTracker {
         if (!app) return;
 
         const found = { editor: null, editorArea: 0, scrollbar: null };
+        // #region agent log
+        /* Direct child count of the Kate app accessible. Pre-fix
+         * (toolkit-accessibility=false) this is 0 even though the app
+         * node itself is discoverable, which is the hallmark of Qt not
+         * having activated its AT-SPI bridge. Post-fix should be >= 1. */
+        const appChildCount = safeChildCount(app);
+        _agentDbg('KateWindowTracker._tryDiscover', 'app children count', {
+            hypothesisId: 'H3', pid: this.pid, appChildCount,
+            retry: this._retryCount,
+        });
+        // #endregion
         this._walk(app, 0, false, found);
 
         if (found.editor)
