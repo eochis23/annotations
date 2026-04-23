@@ -266,6 +266,173 @@ RegionActivated routing.
   without a barrel press. Barrel presses over the dock are silently
   consumed (no color/clear activation).
 
+## Scroll-following (Kate)
+
+Layered on top of window-following. Goal: ink drawn over a Kate
+editor pane moves with the document as the user scrolls; ink drawn
+anywhere else on Kate's window (terminal pane, tool views, tabs,
+menu) stays pinned to the window as before.
+
+### Data model additions
+
+- `Stroke.follow_scroll` (bool). When `TRUE`, `InkPoint` coordinates
+  are in *editor content space*: `x` relative to the editor region's
+  left edge, `y` in document pixels inclusive of the scroll offset at
+  the time the point was recorded. When `FALSE`, behavior is identical
+  to pre-scroll builds.
+- `WindowInk.has_editor_region` + `editor_x, editor_y, editor_w,
+  editor_h` (window-local logical pixels). Published externally via
+  `SetWindowEditorRegion`. Marks the hot-zone that qualifies new
+  strokes for follow-scroll semantics and clips their rendering.
+- `WindowInk.scroll_x, scroll_y` (document pixels). Published
+  externally via `SetWindowScroll`. Subtracted from content-space
+  points at render time.
+- `MetaAnnotationLayer.stroke_follow_scroll` (bool). Caches the
+  begin-stroke hit-test result for the duration of a single press so
+  `append_ink_point` can stamp new Strokes consistently.
+
+### Coordinate math
+
+At draw time (inside editor region, follow stroke):
+
+    content_x = window_x - editor_x + scroll_x
+    content_y = window_y - editor_y + scroll_y
+
+At render time:
+
+    window_x = content_x + editor_x - scroll_x
+    window_y = content_y + editor_y - scroll_y
+
+Live feedback in `continue_stroke` still paints at window-local
+coordinates — that's where the pen visibly is *now*, and scrolls
+mid-stroke are prevented by ending the stroke on scroll update. The
+stored `InkPoint` is what gets translated; the live pixels will be
+cleared and repainted from storage at the next rasterize pass.
+
+### Rasterizer (two-pass)
+
+`rasterize_all_strokes_with_ink` clears the surface and then:
+
+1. **Non-follow pass.** One cairo_t, identity transform, no clip.
+   Paints every non-follow stroke. Matches pre-scroll behavior
+   exactly.
+2. **Follow pass (only if `has_editor_region` and at least one
+   follow stroke exists).** One cairo_t clipped to the editor
+   rectangle and translated by
+   `(editor_x - scroll_x, editor_y - scroll_y)`. Paints every
+   follow stroke. The clip guarantees follow ink cannot bleed onto
+   neighboring chrome (tabs, terminal, toolbars, scrollbar).
+
+`rasterize_all_strokes` is now a thin wrapper that passes `NULL` ink
+for the unattached (stage-sized) surface, which never has follow
+strokes.
+
+### `draw_segment_full` -> `draw_segment_on_cr`
+
+The per-segment painter now takes a caller-provided `cairo_t` and
+wraps its state changes in `cairo_save` / `cairo_restore`. This lets
+the rasterizer install one clip + translate for an entire stroke
+batch instead of building a fresh cairo_t per segment (which would
+drop the clip). Live-feedback callers in `continue_stroke` create and
+destroy their own short-lived cairo_t; performance is unchanged for
+that path (cairo contexts are cheap to allocate against an image
+surface).
+
+### Erase hit-test for follow strokes
+
+`erase_strokes_hit_by_segment` now accepts a `WindowInk *ink`
+argument (`NULL` for unattached strokes) and handles each stroke
+according to its `follow_scroll` bit:
+
+- Non-follow strokes: identical to the previous behavior — the
+  eraser segment (already in window-local coords) is tested directly
+  against the stored (also window-local) polyline.
+- Follow strokes: the eraser segment is translated into editor
+  content space before the segment-to-segment distance test. Also,
+  if *neither* eraser endpoint is inside the editor region, the
+  stroke is skipped entirely, so flailing the eraser over the
+  terminal pane can never delete invisible ink below or above the
+  editor viewport.
+
+### Mid-stroke scroll / editor-region change
+
+Both `SetWindowScroll` and `SetWindowEditorRegion` call `end_stroke`
+on any in-flight stroke anchored to the affected window (scroll only
+ends it if that stroke is `follow_scroll`; region change always
+ends it, since the content-vs-window decision could flip). This
+avoids a smeared line on sudden scroll jumps and avoids half-
+converting coordinates mid-polyline.
+
+### D-Bus surface
+
+Two new methods on `org.gnome.Mutter.Annotation`, both keyed by PID:
+
+| Method                       | Signature               | Semantics                                                                 |
+|------------------------------|-------------------------|---------------------------------------------------------------------------|
+| `SetWindowEditorRegion(...)` | `(u pid, i x,y,w,h)`    | Register the editor hot-zone on every MetaWindow with this PID; `w=0` or `h=0` clears it. |
+| `SetWindowScroll(...)`       | `(u pid, i sx, i sy)`   | Update scroll offset on every MetaWindow with this PID; triggers re-rasterize. |
+
+Unknown PIDs are no-ops. Matching by PID means multi-top-level apps
+sharing a process will share the same region + scroll (fine for
+Kate, a known limitation if another target app ever matters).
+
+### Kate wiring (`kateTracker.js`)
+
+A new module `annotations-shell-extension/kateTracker.js` discovers
+Kate via AT-SPI and drives the two D-Bus methods:
+
+- `Atspi.init()` once on extension enable; two global event
+  listeners registered for `object:value-changed` (scroll events)
+  and `object:bounds-changed` (editor widget layout shifts).
+- Per Kate top-level (matched by `wm_class == "kate"` /
+  `"org.kde.kate"`), a `KateWindowTracker` walks the AT-SPI tree
+  with exponential-backoff retries (Kate registers asynchronously
+  after window-map):
+  - Finds the *largest* `ROLE_TEXT` descendant that does **not**
+    have a `ROLE_TERMINAL` ancestor. This is the "separate the
+    terminal and the code editing portion" filter: Konsole's
+    text display is rooted under a TERMINAL, so it's skipped even
+    though it too is TEXT-role.
+  - Finds a vertical `ROLE_SCROLL_BAR` adjacent to the editor
+    (right-edge, y-overlap) during the same walk.
+- The editor's window-local extents are pushed via
+  `SetWindowEditorRegion`; they're republished on window
+  `size-changed` / `position-changed` and on AT-SPI
+  bounds-changed events targeting the editor.
+- Scroll is computed from the editor's `Text.getCharacterExtents(0,
+  WINDOW)` y-delta vs. a baseline captured at discovery, so we
+  don't have to care whether Kate's scrollbar reports values in
+  lines or pixels. If the Text interface is unavailable, falls
+  back to the raw scrollbar `current_value`.
+- Value-changed events are filtered to Kate by PID, then to the
+  editor scrollbar by either cached reference equality or
+  adjacency to the cached editor region. Terminal scrollbar events
+  are ignored because the terminal's scrollbar is never adjacent
+  to the editor.
+- `MetaWindow::unmanaged` tears the tracker down and sends
+  `SetWindowEditorRegion(pid, 0, 0, 0, 0)` so Mutter forgets the
+  region; extension `disable()` tears down all trackers and
+  deregisters AT-SPI listeners.
+
+### Known limits of the Kate path
+
+- Multi-window Kate (multiple top-levels under one process) shares
+  a single editor region + scroll offset. Multi-tab-single-window
+  Kate is fine: tabs reuse the same view, so switching tabs just
+  updates char 0's position and yields a scroll delta.
+- AT-SPI must be running (standard on any system with Qt
+  accessibility enabled). If `Atspi.init()` throws, the dock + ink
+  continue to work but without scroll-following.
+- First stroke on a freshly-opened Kate window may land up to a
+  few seconds before discovery completes (exponential backoff is
+  ~14s total). Such strokes are stored as non-follow and stay
+  pinned to the window, which is consistent with "no region
+  published".
+- `KTextEditor::View` reports `getCharacterExtents` in pixels on
+  all current Qt versions we tested against; on stacks where it
+  doesn't, the scrollbar fallback still produces correct direction
+  and approximate magnitude (line-quantized).
+
 ## Known limitations / out of scope
 
 - Rectangular occlusion only. Shaped and rounded-corner windows will
@@ -283,3 +450,5 @@ RegionActivated routing.
   is consumed.
 - Per-device pressure calibration is a fixed `[0.1, 1.0]` clamp with a
   hard-coded `sqrt` gamma and `BASE_WIDTH = 6.0` logical px.
+- Scroll-following only for Kate (via AT-SPI). Other editors would
+  need their own tracker.
