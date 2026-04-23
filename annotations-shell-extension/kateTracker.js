@@ -346,32 +346,71 @@ class KateWindowTracker {
             this._pollTicks = 0;
             this._pollLastY = null;
             if (!this._pollId) {
+                /* H28 diagnostic: every 500ms query both Text and Value
+                 * interfaces, and fall back to the editor's own extents
+                 * (which we KNOW work - discovery used them). Record the
+                 * failure mode so we can tell a missing interface apart
+                 * from a throwing call apart from a stable value. */
                 this._pollId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 500, () => {
                     this._pollTicks++;
-                    let y = null;
+                    const diag = {
+                        hypothesisId: 'H25-H28',
+                        pid: this.pid,
+                        tick: this._pollTicks,
+                        qTextType: 'missing',
+                        textY: null,
+                        textErr: null,
+                        qValueType: 'missing',
+                        sbVal: null,
+                        sbErr: null,
+                        edExtY: null,
+                        edExtErr: null,
+                        sbExtY: null,
+                        sbExtH: null,
+                    };
                     try {
-                        const text = this.editor?.query_text?.();
-                        if (text) {
-                            const r = text.get_character_extents(0, Atspi.CoordType.WINDOW);
-                            if (r) y = r.y;
+                        if (this.editor) {
+                            diag.qTextType = typeof this.editor.query_text;
+                            if (typeof this.editor.query_text === 'function') {
+                                const text = this.editor.query_text();
+                                diag.qTextType = text ? 'obj' : 'null';
+                                if (text) {
+                                    try {
+                                        const r = text.get_character_extents(0, Atspi.CoordType.WINDOW);
+                                        diag.textY = r ? r.y : 'rect-null';
+                                    } catch (e) { diag.textErr = String(e?.message ?? e).slice(0, 80); }
+                                }
+                            }
+                        }
+                    } catch (e) { diag.textErr = String(e?.message ?? e).slice(0, 80); }
+                    try {
+                        if (this.scrollbar) {
+                            diag.qValueType = typeof this.scrollbar.query_value;
+                            if (typeof this.scrollbar.query_value === 'function') {
+                                const val = this.scrollbar.query_value();
+                                diag.qValueType = val ? 'obj' : 'null';
+                                if (val) {
+                                    try { diag.sbVal = val.get_current_value(); }
+                                    catch (e) { diag.sbErr = String(e?.message ?? e).slice(0, 80); }
+                                }
+                            }
+                        }
+                    } catch (e) { diag.sbErr = String(e?.message ?? e).slice(0, 80); }
+                    try {
+                        if (this.editor) {
+                            const ex = this.editor.get_extents(Atspi.CoordType.WINDOW);
+                            diag.edExtY = ex ? ex.y : null;
+                        }
+                    } catch (e) { diag.edExtErr = String(e?.message ?? e).slice(0, 80); }
+                    try {
+                        if (this.scrollbar) {
+                            const sx = this.scrollbar.get_extents(Atspi.CoordType.WINDOW);
+                            if (sx) { diag.sbExtY = sx.y; diag.sbExtH = sx.height; }
                         }
                     } catch (e) {}
-                    let sbVal = null;
-                    try {
-                        const val = this.scrollbar?.query_value?.();
-                        if (val) sbVal = val.get_current_value();
-                    } catch (e) {}
-                    if (y !== this._pollLastY || this._pollTicks % 10 === 0) {
-                        _agentDbg('KateWindowTracker.poll', 'char0 y', {
-                            hypothesisId: 'H25-H27',
-                            pid: this.pid,
-                            tick: this._pollTicks,
-                            y,
-                            deltaY: this._pollLastY === null ? null : (y - this._pollLastY),
-                            sbVal,
-                        });
+                    if (this._pollTicks <= 3 || this._pollTicks % 10 === 0) {
+                        _agentDbg('KateWindowTracker.poll', 'probe', diag);
                     }
-                    this._pollLastY = y;
                     if (this._pollTicks >= 120) {
                         this._pollId = 0;
                         return GLib.SOURCE_REMOVE;
