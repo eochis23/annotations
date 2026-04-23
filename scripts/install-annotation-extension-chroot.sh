@@ -10,53 +10,13 @@ UUID="annotation@annotations.local"
 DEST="$MP/usr/share/gnome-shell/extensions/$UUID"
 SRC="$HERE/annotations-shell-extension"
 
-# #region agent log
-_agent_log_path='/home/eochis/Projects/annotations/.cursor/debug-da8410.log'
-_agent_log() {
-	local loc="$1"; shift
-	local msg="$1"; shift
-	local data_json="${1:-{\}}"
-	mkdir -p "$(dirname "$_agent_log_path")" 2>/dev/null || true
-	printf '{"sessionId":"da8410","runId":"install","hypothesisId":"H1","location":"%s","message":"%s","data":%s,"timestamp":%s}\n' \
-		"$loc" "$msg" "$data_json" "$(date +%s%3N)" >> "$_agent_log_path" 2>/dev/null || true
-}
-_agent_json_list() { # Emit JSON array of filenames in a dir (basename-only), sorted.
-	local dir="$1"
-	if [[ ! -d "$dir" ]]; then
-		printf '[]'
-		return
-	fi
-	local first=1
-	printf '['
-	while IFS= read -r -d '' f; do
-		local bn
-		bn=$(basename "$f")
-		if [[ $first -eq 1 ]]; then first=0; else printf ','; fi
-		printf '"%s"' "${bn//\"/\\\"}"
-	done < <(find "$dir" -maxdepth 1 -type f -print0 | sort -z)
-	printf ']'
-}
-# #endregion
-
 if [[ ! -f "$SRC/metadata.json" ]]; then
 	echo "Error: missing $SRC/metadata.json"
 	exit 1
 fi
 
-# #region agent log
-_agent_log "install-annotation-extension-chroot.sh:pre-copy" \
-	"source files at SRC before cp" \
-	"{\"src\":\"$SRC\",\"files\":$(_agent_json_list "$SRC"),\"kateTracker_src_exists\":$([[ -f "$SRC/kateTracker.js" ]] && echo true || echo false)}"
-# #endregion
-
 sudo mkdir -p "$DEST"
 sudo cp -a "$SRC/extension.js" "$SRC/kateTracker.js" "$SRC/metadata.json" "$SRC/stylesheet.css" "$DEST/"
-
-# #region agent log
-_agent_log "install-annotation-extension-chroot.sh:post-copy" \
-	"destination files after cp" \
-	"{\"dest\":\"$DEST\",\"files\":$(_agent_json_list "$DEST"),\"kateTracker_dest_exists\":$([[ -f "$DEST/kateTracker.js" ]] && echo true || echo false)}"
-# #endregion
 
 sudo mkdir -p "$MP/etc/dconf/db/local.d"
 sudo tee "$MP/etc/dconf/db/local.d/99-annotation-extension" >/dev/null <<'EOF'
