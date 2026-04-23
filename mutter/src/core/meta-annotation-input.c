@@ -118,6 +118,12 @@ meta_annotation_input_debug_emit_pointer_position_if_leak (ClutterInputDevice *d
   /* #endregion */
 }
 
+gboolean
+meta_annotation_input_get_non_mouse_pointer_isolated (void)
+{
+  return g_atomic_int_get (&annotation_non_mouse_isolated) != 0;
+}
+
 void
 meta_annotation_input_set_non_mouse_pointer_isolated (gboolean isolated)
 {

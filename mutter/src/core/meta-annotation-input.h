@@ -16,6 +16,7 @@ void     meta_annotation_debug_append_ndjson (const gchar *hypothesis_id,
 gboolean meta_annotation_event_targets_overlay (const ClutterEvent *event);
 
 void     meta_annotation_input_set_non_mouse_pointer_isolated (gboolean isolated);
+gboolean meta_annotation_input_get_non_mouse_pointer_isolated (void);
 
 void     meta_annotation_input_note_tablet_family_motion (gint64 libinput_device_group,
                                                           float  x,
