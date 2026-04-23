@@ -112,6 +112,25 @@ function safePid(acc) {
     try { return acc.get_process_id(); } catch (e) { return -1; }
 }
 
+/* /proc/<pid>/comm is the kernel's executable comm name (truncated to
+ * 15 chars). This is present from process creation, independent of
+ * whatever Wayland xdg_toplevel app_id Qt eventually sets. Meta.Window
+ * on GNOME Shell 48 + our patched Mutter was observed returning null
+ * from get_wm_class() / get_wm_class_instance() / get_gtk_application_id()
+ * for both Kate (pid 6327) and GNOME Terminal (pid 5648) at
+ * window-created time, so we can't trust those identifiers as the
+ * primary signal. */
+function _procComm(pid) {
+    if (!pid || pid <= 0) return null;
+    try {
+        const [ok, contents] = GLib.file_get_contents(`/proc/${pid}/comm`);
+        if (!ok || !contents) return null;
+        const s = (typeof contents === 'string')
+            ? contents : new TextDecoder().decode(contents);
+        return s.replace(/\s+$/, '');
+    } catch (e) { return null; }
+}
+
 /* Per-Kate-window state + polling cache. */
 class KateWindowTracker {
     constructor(win, owner) {
@@ -611,19 +630,23 @@ export class KateTrackerManager {
     _isKate(win) {
         if (!win) return false;
         const cls = win.get_wm_class();
-        const match = !!cls && KATE_WM_CLASSES.has(cls.toLowerCase());
+        const classMatch = !!cls && KATE_WM_CLASSES.has(cls.toLowerCase());
+        const pid = (typeof win.get_pid === 'function') ? win.get_pid() : -1;
+        /* Fallback for when Meta.Window.get_wm_class() is null at
+         * window-created time (observed on GNOME Shell 48 + Qt Wayland
+         * Kate + our patched Mutter, session da8410 run 1776929165838). */
+        let commMatch = false;
+        let comm = null;
+        if (!classMatch) {
+            comm = _procComm(pid);
+            commMatch = (comm === 'kate');
+        }
+        const match = classMatch || commMatch;
         // #region agent log
-        /* Logs every window the manager inspects -- intentionally noisy
-         * so H2 (wm_class mismatch) is unambiguous from one boot. */
-        _agentDbg('KateTrackerManager._isKate', 'wm_class check', {
+        _agentDbg('KateTrackerManager._isKate', 'window match check', {
             hypothesisId: 'H2',
             wmClass: cls ?? null,
-            wmClassInstance: (typeof win.get_wm_class_instance === 'function')
-                ? (win.get_wm_class_instance() ?? null) : undefined,
-            gtkAppId: (typeof win.get_gtk_application_id === 'function')
-                ? (win.get_gtk_application_id() ?? null) : undefined,
-            pid: (typeof win.get_pid === 'function') ? win.get_pid() : null,
-            match,
+            pid, comm, classMatch, commMatch, match,
         });
         // #endregion
         return match;
