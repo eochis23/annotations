@@ -1828,44 +1828,6 @@ meta_compositor_route_annotation_event (MetaCompositor    *compositor,
   press_active = meta_annotation_layer_chrome_press_active (priv->annotation_layer,
                                                             &pressed_id);
 
-  /* #region agent log */
-  {
-    static char g_dbg_path[512];
-    static gboolean g_dbg_init;
-    if (!g_dbg_init)
-      {
-        const char *home = g_get_home_dir ();
-        if (home && *home)
-          g_snprintf (g_dbg_path, sizeof g_dbg_path,
-                      "%s/mutter-annot-debug-da8410.log", home);
-        else
-          g_strlcpy (g_dbg_path, "/tmp/mutter-annot-debug-da8410.log",
-                     sizeof g_dbg_path);
-        g_dbg_init = TRUE;
-      }
-    if (type == CLUTTER_BUTTON_PRESS || type == CLUTTER_BUTTON_RELEASE ||
-        type == CLUTTER_TOUCH_BEGIN  || type == CLUTTER_TOUCH_END ||
-        type == CLUTTER_TOUCH_CANCEL)
-      {
-        FILE *f = fopen (g_dbg_path, "a");
-        if (f)
-          {
-            float lx = 0, ly = 0;
-            clutter_event_get_coords (event, &lx, &ly);
-            fprintf (f,
-                     "{\"sessionId\":\"da8410\",\"hypothesisId\":\"H3\","
-                     "\"location\":\"compositor.c:route_annotation_event:enter\","
-                     "\"message\":\"routing event\","
-                     "\"data\":{\"type\":%d,\"x\":%.2f,\"y\":%.2f,\"press_active\":%d},"
-                     "\"timestamp\":%lld}\n",
-                     (int) type, lx, ly, press_active ? 1 : 0,
-                     (long long) (g_get_real_time () / 1000));
-            fclose (f);
-          }
-      }
-  }
-  /* #endregion */
-
   /* Synthetic dock activation: hit-test chrome regions on press, emit
    * RegionActivated, and consume the press so no ink stroke begins. */
   if (type == CLUTTER_BUTTON_PRESS || type == CLUTTER_TOUCH_BEGIN)
@@ -1876,30 +1838,6 @@ meta_compositor_route_annotation_event (MetaCompositor    *compositor,
       clutter_event_get_coords (event, &p.x, &p.y);
       id = meta_annotation_layer_pick_chrome_region (priv->annotation_layer,
                                                      p.x, p.y);
-      /* #region agent log */
-      {
-        char p_path[512];
-        const char *home = g_get_home_dir ();
-        if (home && *home)
-          g_snprintf (p_path, sizeof p_path,
-                      "%s/mutter-annot-debug-da8410.log", home);
-        else
-          g_strlcpy (p_path, "/tmp/mutter-annot-debug-da8410.log", sizeof p_path);
-        FILE *f = fopen (p_path, "a");
-        if (f)
-          {
-            fprintf (f,
-                     "{\"sessionId\":\"da8410\",\"hypothesisId\":\"H2+H3+H4\","
-                     "\"location\":\"compositor.c:route_annotation_event:press\","
-                     "\"message\":\"press hit-test\","
-                     "\"data\":{\"type\":%d,\"x\":%.2f,\"y\":%.2f,\"picked\":\"%s\"},"
-                     "\"timestamp\":%lld}\n",
-                     (int) type, p.x, p.y, id ? id : "",
-                     (long long) (g_get_real_time () / 1000));
-            fclose (f);
-          }
-      }
-      /* #endregion */
       if (id)
         {
           const char *kind = (type == CLUTTER_BUTTON_PRESS) ? "press"

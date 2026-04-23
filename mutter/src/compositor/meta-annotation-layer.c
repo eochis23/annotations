@@ -14,46 +14,6 @@
 #include <cairo.h>
 #include <glib.h>
 #include <math.h>
-#include <stdio.h>
-
-/* #region agent log */
-static const char *
-dbg_log_path (void)
-{
-  /* /home is not shared across partitions, so write into the running
-   * session's own $HOME. After reboot the host mounts the second-partition
-   * root and reads from <MOUNT_POINT>/home/<user>/mutter-annot-debug-da8410.log. */
-  static char path[512];
-  static gboolean initialized;
-
-  if (!initialized)
-    {
-      const char *home = g_get_home_dir ();
-      if (home && *home)
-        g_snprintf (path, sizeof path, "%s/mutter-annot-debug-da8410.log", home);
-      else
-        g_strlcpy (path, "/tmp/mutter-annot-debug-da8410.log", sizeof path);
-      initialized = TRUE;
-    }
-  return path;
-}
-
-static void
-dbg_log (const char *location, const char *hypothesis, const char *msg_json,
-         const char *data_json)
-{
-  FILE *f = fopen (dbg_log_path (), "a");
-  if (!f)
-    return;
-  fprintf (f,
-           "{\"sessionId\":\"da8410\",\"hypothesisId\":\"%s\","
-           "\"location\":\"%s\",\"message\":%s,\"data\":%s,"
-           "\"timestamp\":%lld}\n",
-           hypothesis, location, msg_json, data_json,
-           (long long) (g_get_real_time () / 1000));
-  fclose (f);
-}
-/* #endregion */
 
 typedef struct _ChromeRegion
 {
@@ -358,19 +318,6 @@ meta_annotation_layer_set_color (MetaAnnotationLayer *layer,
   layer->rgba[1] = (float) g;
   layer->rgba[2] = (float) b;
   layer->rgba[3] = (float) a;
-
-  /* #region agent log */
-  {
-    char data[256];
-    snprintf (data, sizeof data,
-              "{\"r\":%.3f,\"g\":%.3f,\"b\":%.3f,\"a\":%.3f,\"layer\":\"%p\"}",
-              (double) layer->rgba[0], (double) layer->rgba[1],
-              (double) layer->rgba[2], (double) layer->rgba[3],
-              (void *) layer);
-    dbg_log ("meta-annotation-layer.c:set_color", "H8",
-             "\"rgba updated\"", data);
-  }
-  /* #endregion */
 }
 
 static void
@@ -391,25 +338,6 @@ draw_segment (MetaAnnotationLayer *layer,
   cairo_set_source_rgba (cr,
                          layer->rgba[0], layer->rgba[1],
                          layer->rgba[2], layer->rgba[3]);
-  /* #region agent log */
-  {
-    static gint64 last_log_us = 0;
-    gint64 now_us = g_get_real_time ();
-    /* Throttle: stroke motion calls this ~60-120Hz; one log per 500ms is enough. */
-    if (now_us - last_log_us > 500000)
-      {
-        char data[256];
-        snprintf (data, sizeof data,
-                  "{\"r\":%.3f,\"g\":%.3f,\"b\":%.3f,\"a\":%.3f,\"layer\":\"%p\"}",
-                  (double) layer->rgba[0], (double) layer->rgba[1],
-                  (double) layer->rgba[2], (double) layer->rgba[3],
-                  (void *) layer);
-        dbg_log ("meta-annotation-layer.c:draw_segment", "H9",
-                 "\"stroke color\"", data);
-        last_log_us = now_us;
-      }
-  }
-  /* #endregion */
   cairo_set_line_width (cr, 4.0);
   cairo_set_line_cap (cr, CAIRO_LINE_CAP_ROUND);
   cairo_set_line_join (cr, CAIRO_LINE_JOIN_ROUND);
@@ -590,27 +518,7 @@ meta_annotation_layer_set_chrome_regions (MetaAnnotationLayer *layer,
       r.id = g_strdup (id);
       graphene_rect_init (&r.rect, (float) x, (float) y, (float) w, (float) h);
       g_array_append_val (arr, r);
-
-      /* #region agent log */
-      {
-        char data[256];
-        snprintf (data, sizeof data,
-                  "{\"id\":\"%s\",\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d}",
-                  id, x, y, w, h);
-        dbg_log ("meta-annotation-layer.c:set_chrome_regions", "H1",
-                 "\"stored region\"", data);
-      }
-      /* #endregion */
     }
-
-  /* #region agent log */
-  {
-    char data[128];
-    snprintf (data, sizeof data, "{\"count\":%u}", arr->len);
-    dbg_log ("meta-annotation-layer.c:set_chrome_regions", "H1",
-             "\"regions set total\"", data);
-  }
-  /* #endregion */
 }
 
 void

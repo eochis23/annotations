@@ -68,29 +68,6 @@ function removeSource(id) {
     return 0;
 }
 
-// #region agent log
-/* /home is not shared across partitions; write to $HOME on whichever
- * partition is actually running the session so the log is retrievable. */
-const _DBG_PATH = `${GLib.get_home_dir()}/mutter-annot-debug-da8410.log`;
-const _DBG_ENC = new TextEncoder();
-function dbgLog(hypothesisId, location, message, data) {
-    try {
-        const line = `${JSON.stringify({
-            sessionId: 'da8410',
-            hypothesisId,
-            location,
-            message,
-            data,
-            timestamp: Date.now(),
-        })}\n`;
-        const f = Gio.File.new_for_path(_DBG_PATH);
-        const s = f.append_to(Gio.FileCreateFlags.NONE, null);
-        s.write(_DBG_ENC.encode(line), null);
-        s.close(null);
-    } catch (_e) { /* ignore */ }
-}
-// #endregion
-
 export default class AnnotationExtension extends Extension {
     _trySetAnnotationActive() {
         dbusCall('SetActive', new GLib.Variant('(b)', [true]), err => {
@@ -152,21 +129,8 @@ export default class AnnotationExtension extends Extension {
     }
 
     _activateRegion(id) {
-        // #region agent log
-        dbgLog('H6+H10', 'extension.js:_activateRegion:enter',
-            'activate region', {
-                id,
-                typeofId: typeof id,
-                isClear: id === CLEAR_REGION_ID,
-                matchesColor: typeof id === 'string' && id.startsWith('color-'),
-            });
-        // #endregion
         if (id === CLEAR_REGION_ID) {
             dbusCall('Clear', null, err => {
-                // #region agent log
-                dbgLog('H7', 'extension.js:_activateRegion:Clear:reply',
-                    'Clear reply', {error: err ? err.message : null});
-                // #endregion
                 if (err)
                     console.warn(`Annotation Clear: ${err.message}`);
             });
@@ -177,16 +141,8 @@ export default class AnnotationExtension extends Extension {
             const c = COLORS[i];
             if (!c)
                 return;
-            // #region agent log
-            dbgLog('H7', 'extension.js:_activateRegion:SetColor:call',
-                'about to call SetColor', {i, color: c});
-            // #endregion
             const params = new GLib.Variant('(dddd)', [c.r, c.g, c.b, c.a]);
             dbusCall('SetColor', params, err => {
-                // #region agent log
-                dbgLog('H7', 'extension.js:_activateRegion:SetColor:reply',
-                    'SetColor reply', {error: err ? err.message : null});
-                // #endregion
                 if (err)
                     console.warn(`Annotation SetColor: ${err.message}`);
             });
@@ -271,16 +227,6 @@ export default class AnnotationExtension extends Extension {
                     continue;
                 list.push([id, Math.round(x), Math.round(y), Math.round(w), Math.round(h)]);
             }
-            // #region agent log
-            dbgLog('H1+H2', 'extension.js:_publishChromeRegions',
-                'about to call SetChromeRegions', {
-                    count: list.length,
-                    list,
-                    dockVisible: this._dock?.visible,
-                    dockPos: this._dock ? [this._dock.x, this._dock.y] : null,
-                    dockSize: this._dock ? [this._dock.width, this._dock.height] : null,
-                });
-            // #endregion
             if (!list.length) {
                 this._clearChromeRegions();
                 return;
@@ -289,10 +235,6 @@ export default class AnnotationExtension extends Extension {
                 'SetChromeRegions',
                 new GLib.Variant('(a(siiii))', [list]),
                 err => {
-                    // #region agent log
-                    dbgLog('H1', 'extension.js:_publishChromeRegions:reply',
-                        'SetChromeRegions reply', {error: err ? err.message : null});
-                    // #endregion
                     if (err) {
                         this._regionsPublished = false;
                         return;
@@ -358,14 +300,6 @@ export default class AnnotationExtension extends Extension {
             null,
             Gio.DBusSignalFlags.NONE,
             (conn_, sender_, path_, iface_, signal_, params) => {
-                // #region agent log
-                try {
-                    const [dbgId, dbgKind] = params.deep_unpack();
-                    dbgLog('H1+H3', 'extension.js:RegionActivated',
-                        'RegionActivated received',
-                        {id: dbgId, kind: dbgKind, dockAlive: !!this._dock});
-                } catch (_e) {}
-                // #endregion
                 if (!this._dock)
                     return;
                 const [id, kind] = params.deep_unpack();
