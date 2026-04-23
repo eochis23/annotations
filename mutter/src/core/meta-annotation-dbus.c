@@ -53,6 +53,29 @@ handle_method_call (GDBusConnection       *connection,
       double r, g, b, a;
 
       g_variant_get (parameters, "(dddd)", &r, &g, &b, &a);
+      /* #region agent log */
+      {
+        char p[512];
+        const char *home = g_get_home_dir ();
+        if (home && *home)
+          g_snprintf (p, sizeof p, "%s/mutter-annot-debug-da8410.log", home);
+        else
+          g_strlcpy (p, "/tmp/mutter-annot-debug-da8410.log", sizeof p);
+        FILE *f = fopen (p, "a");
+        if (f)
+          {
+            fprintf (f,
+                     "{\"sessionId\":\"da8410\",\"hypothesisId\":\"H7+H8\","
+                     "\"location\":\"meta-annotation-dbus.c:SetColor\","
+                     "\"message\":\"handle_method_call SetColor\","
+                     "\"data\":{\"r\":%.3f,\"g\":%.3f,\"b\":%.3f,\"a\":%.3f,\"sender\":\"%s\"},"
+                     "\"timestamp\":%lld}\n",
+                     r, g, b, a, sender ? sender : "",
+                     (long long) (g_get_real_time () / 1000));
+            fclose (f);
+          }
+      }
+      /* #endregion */
       meta_annotation_layer_set_color (dbus->layer, r, g, b, a);
       g_dbus_method_invocation_return_value (invocation, NULL);
     }

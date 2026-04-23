@@ -152,8 +152,21 @@ export default class AnnotationExtension extends Extension {
     }
 
     _activateRegion(id) {
+        // #region agent log
+        dbgLog('H6+H10', 'extension.js:_activateRegion:enter',
+            'activate region', {
+                id,
+                typeofId: typeof id,
+                isClear: id === CLEAR_REGION_ID,
+                matchesColor: typeof id === 'string' && id.startsWith('color-'),
+            });
+        // #endregion
         if (id === CLEAR_REGION_ID) {
             dbusCall('Clear', null, err => {
+                // #region agent log
+                dbgLog('H7', 'extension.js:_activateRegion:Clear:reply',
+                    'Clear reply', {error: err ? err.message : null});
+                // #endregion
                 if (err)
                     console.warn(`Annotation Clear: ${err.message}`);
             });
@@ -164,8 +177,16 @@ export default class AnnotationExtension extends Extension {
             const c = COLORS[i];
             if (!c)
                 return;
+            // #region agent log
+            dbgLog('H7', 'extension.js:_activateRegion:SetColor:call',
+                'about to call SetColor', {i, color: c});
+            // #endregion
             const params = new GLib.Variant('(dddd)', [c.r, c.g, c.b, c.a]);
             dbusCall('SetColor', params, err => {
+                // #region agent log
+                dbgLog('H7', 'extension.js:_activateRegion:SetColor:reply',
+                    'SetColor reply', {error: err ? err.message : null});
+                // #endregion
                 if (err)
                     console.warn(`Annotation SetColor: ${err.message}`);
             });
