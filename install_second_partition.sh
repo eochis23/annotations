@@ -53,7 +53,7 @@ WE_MOUNTED=0
 cleanup() {
 	if [ "$WE_MOUNTED" -eq 1 ]; then
 		echo "Unmounting $MOUNT_POINT..."
-		# sudo umount "$MOUNT_POINT"
+		sudo umount "$MOUNT_POINT"
 	fi
 }
 

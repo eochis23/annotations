@@ -1471,11 +1471,11 @@ update_actor_visibility (MetaAnnotationLayer *layer)
           recompose (layer);
         }
 
-      clutter_actor_show (layer->actor);
+        clutter_actor_show (layer->actor);
     }
-  else
+      else
     {
-      clutter_actor_hide (layer->actor);
+        clutter_actor_hide (layer->actor);
     }
 }
 
@@ -1541,10 +1541,10 @@ meta_annotation_layer_set_paused (MetaAnnotationLayer *layer,
 
 void
 meta_annotation_layer_set_color (MetaAnnotationLayer *layer,
-                                 double               r,
-                                 double               g,
-                                 double               b,
-                                 double               a)
+                                  double               r,
+                                  double               g,
+                                  double               b,
+                                  double               a)
 {
   g_return_if_fail (layer != NULL);
   layer->rgba[0] = (float) r;
@@ -2647,7 +2647,7 @@ meta_annotation_layer_handle_event (MetaAnnotationLayer *layer,
        * ongoing stroke (the tip may still be down). */
       if (handle_tool_modifier_press (layer, event, FALSE))
         return TRUE;
-      clutter_event_get_coords (event, &pos.x, &pos.y);
+          clutter_event_get_coords (event, &pos.x, &pos.y);
       if (layer->stroke_active)
         continue_stroke (layer, pos.x, pos.y,
                          pressure_known, pressure,
@@ -2685,7 +2685,7 @@ meta_annotation_layer_handle_event (MetaAnnotationLayer *layer,
       return TRUE;
 
     case CLUTTER_TOUCH_END:
-      clutter_event_get_coords (event, &pos.x, &pos.y);
+          clutter_event_get_coords (event, &pos.x, &pos.y);
       if (layer->stroke_active)
         continue_stroke (layer, pos.x, pos.y,
                          pressure_known, pressure,
