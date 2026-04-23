@@ -11,26 +11,34 @@ import St from 'gi://St';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 
+import {KateTrackerManager} from './kateTracker.js';
+
 const BUS = 'org.gnome.Mutter.Annotation';
 const PATH = '/org/gnome/Mutter/Annotation';
 const IFACE = 'org.gnome.Mutter.Annotation';
 
 const COLORS = [
+    {r: 0.15, g: 0.15, b: 0.15, a: 1.0},
+    {r: 0.9, g: 0.9, b: 0.9, a: 1.0},
     {r: 0.95, g: 0.25, b: 0.25, a: 1.0},
     {r: 0.2, g: 0.55, b: 0.95, a: 1.0},
+    {r: 0.95, g: 0.2, b: 0.85, a: 1.0},
     {r: 0.25, g: 0.75, b: 0.35, a: 1.0},
-    {r: 0.95, g: 0.85, b: 0.2, a: 1.0},
-    {r: 0.9, g: 0.9, b: 0.9, a: 1.0},
-    {r: 0.15, g: 0.15, b: 0.15, a: 1.0},
+    
+    
+    
 ];
 
 const COLOR_LABELS = [
+    'Black pen',
+    'White pen',
     'Red pen',
     'Blue pen',
+    'Purple pen',
     'Green pen',
-    'Yellow pen',
-    'White pen',
-    'Black pen',
+    
+    
+    
 ];
 
 function dbusCall(methodName, parameters, replyHandler) {
@@ -407,9 +415,30 @@ export default class AnnotationExtension extends Extension {
         });
 
         this._startAnnotationActivation();
+
+        /* Kate scroll-following tracker. Separate module because its
+         * lifecycle (AT-SPI listeners, per-window discovery) is
+         * independent of the dock UI and keeps this file's
+         * enable/disable path easy to audit. Failures inside the
+         * tracker (e.g. AT-SPI not running on this session) are
+         * logged and swallowed: the dock + ink continues to work
+         * without scroll-following in that case. */
+        try {
+            this._kateTracker = new KateTrackerManager();
+            this._kateTracker.enable();
+        } catch (e) {
+            console.warn(`Annotations: KateTrackerManager.enable failed: ${e.message}`);
+            this._kateTracker = null;
+        }
     }
 
     disable() {
+        if (this._kateTracker) {
+            try { this._kateTracker.disable(); }
+            catch (e) { console.warn(`Annotations: KateTrackerManager.disable: ${e.message}`); }
+            this._kateTracker = null;
+        }
+
         if (this._overviewShowingId) {
             Main.overview.disconnect(this._overviewShowingId);
             this._overviewShowingId = 0;
