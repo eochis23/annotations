@@ -134,10 +134,36 @@ sudo arch-chroot "$MOUNT_POINT" \
 	/bin/bash <<'CHROOT_BUILD'
 set -euo pipefail
 repo_dir="${CHROOT_REPO_DIR:?}"
+
+# Abort the install if any freshly-built libmutter*.so in build/ is tiny/empty
+# (e.g. linker killed by OOM). Without this, `ninja install` will happily copy
+# 0-byte stubs over the system libraries and leave the target unbootable.
+check_built_libs() {
+	local build_dir="$1"
+	local bad=""
+	# Only consider real ELF shared objects: basename must end in .so or .so[.<digits>]*
+	# (meson also generates text artifacts like libmutter-mtk-18.so.0.0.0.symbols that
+	# we must skip — they're tiny by design.)
+	while IFS= read -r -d '' f; do
+		[[ -L "$f" ]] && continue
+		local bn
+		bn=$(basename "$f")
+		[[ "$bn" =~ ^lib(mutter|cogl|clutter)[^/]*\.so(\.[0-9]+)*$ ]] || continue
+		local sz
+		sz=$(stat -c%s "$f" 2>/dev/null || echo 0)
+		if [[ "$sz" -lt 8192 ]]; then
+			echo "Error: built lib is tiny/empty (${sz} bytes): $f" >&2
+			bad=1
+		fi
+	done < <(find "$build_dir" -type f \( -name 'libmutter*.so*' -o -name 'libcogl*.so*' -o -name 'libclutter*.so*' \) -print0 2>/dev/null || true)
+	[[ -z "$bad" ]]
+}
+
 cd "$repo_dir/mutter"
 rm -rf build
 meson setup build --prefix=/usr ${CHROOT_MUTTER_MESON_SETUP_EXTRA}
 ninja -C build
+check_built_libs "$repo_dir/mutter/build" || { echo "Aborting before ninja install: mutter build produced empty shared libraries." >&2; exit 1; }
 ninja -C build install
 if [[ "${BUILD_TARGETS:-mutter}" == *shell* ]]; then
 	cd "$repo_dir/gnome-shell"

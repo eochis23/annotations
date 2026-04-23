@@ -288,15 +288,44 @@ meta_annotation_layer_set_active (MetaAnnotationLayer *layer,
   if (logged_prev == (gboolean) 2 || logged_prev != active)
     {
       logged_prev = active;
-      g_message ("annotation layer: SetActive %s surface=%p",
+      /* H_parent: is the layer actor parented into a scene graph? Without a parent
+       * (e.g. stock gnome-shell which doesn't call get_annotation_layer), show()
+       * and queue_redraw() are silent — nothing renders. */
+      ClutterActor *parent = layer->actor ? clutter_actor_get_parent (layer->actor) : NULL;
+      ClutterActor *stage = meta_backend_get_stage (layer->backend);
+      float aw = 0, ah = 0;
+      if (layer->actor)
+        clutter_actor_get_size (layer->actor, &aw, &ah);
+      g_message ("annotation layer: da8410 H_parent SetActive %s surface=%p actor=%p parent=%p parent_name=%s is_stage=%d size=%.0fx%.0f",
                  active ? "true" : "false",
-                 (void *) layer->surface);
+                 (void *) layer->surface,
+                 (void *) layer->actor,
+                 (void *) parent,
+                 parent ? (clutter_actor_get_name (parent) ?: "(unnamed)") : "(none)",
+                 parent != NULL && parent == stage ? 1 : 0,
+                 aw, ah);
     }
 
   layer->active = active;
   meta_annotation_input_set_non_mouse_pointer_isolated (active);
   if (layer->actor)
     {
+      /* Fallback: if the shell didn't parent the actor (stock gnome-shell has no
+       * layout.js hook for global.compositor.get_annotation_layer), parent it on
+       * the stage ourselves so show()/queue_redraw are actually observable. */
+      if (active && clutter_actor_get_parent (layer->actor) == NULL)
+        {
+          ClutterActor *stage = meta_backend_get_stage (layer->backend);
+          if (stage)
+            {
+              /* NULL sibling = insert at the very top of the child list so the layer
+               * renders above uiGroup/windows even when the shell fork is absent. */
+              clutter_actor_insert_child_above (stage, layer->actor, NULL);
+              g_message ("annotation layer: da8410 H_parent fallback_parented_to_stage actor=%p stage=%p",
+                         (void *) layer->actor, (void *) stage);
+            }
+        }
+
       if (active)
         clutter_actor_show (layer->actor);
       else

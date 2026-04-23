@@ -9,17 +9,24 @@ if [[ ! -d "$MP/usr/lib" ]]; then
 	exit 1
 fi
 bad=""
+# Real ELF files for libmutter* under /usr/lib (top-level) and /usr/lib/mutter-*/ (subdir).
+# Basename must end in .so or .so[.<digits>]* — skip meson text artifacts like *.symbols.
 while IFS= read -r -d '' f; do
 	[[ -L "$f" ]] && continue
+	bn=$(basename "$f")
+	[[ "$bn" =~ ^libmutter[^/]*\.so(\.[0-9]+)*$ ]] || continue
 	sz=$(stat -c%s "$f" 2>/dev/null || echo 0)
 	if [[ "$sz" -lt 8192 ]]; then
 		echo "Error: mutter library is too small (${sz} bytes): $f"
 		bad=1
 	fi
-done < <(find "$MP/usr/lib" -type f -path '*/mutter-*/libmutter*.so*' -print0 2>/dev/null || true)
-# SONAME symlinks: libmutter*.so.0 (one digit); follow to real ELF
+done < <({
+	find "$MP/usr/lib" -maxdepth 1 -type f -name 'libmutter*.so*' -print0 2>/dev/null
+	find "$MP/usr/lib" -type f -path "*/mutter-*/libmutter*.so*" -print0 2>/dev/null
+} || true)
+# SONAME symlinks: libmutter*.so.0 (one digit); follow to real ELF. Check both dirs.
 shopt -s nullglob
-for sym in "$MP"/usr/lib/mutter-*/libmutter*.so.[0-9]; do
+for sym in "$MP"/usr/lib/libmutter*.so.[0-9] "$MP"/usr/lib/mutter-*/libmutter*.so.[0-9]; do
 	[[ -L "$sym" ]] || continue
 	sz=$(stat -L -c%s "$sym" 2>/dev/null || echo 0)
 	if [[ "$sz" -lt 8192 ]]; then
