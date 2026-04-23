@@ -768,52 +768,43 @@ export class KateTrackerManager {
     }
 
     _onAtspiEvent(event) {
+        if (!event || !event.source) return;
         // #region agent log
-        /* Log ALL Kate-pid events uncapped, plus a periodic heartbeat
-         * every 100 non-Kate events so we can tell a quiet stream from
-         * a dead listener. Kate events are the only ones we need to
-         * diagnose the scroll signal; dropping the non-Kate cap also
-         * avoids the earlier 40-entry limit silently masking a
-         * post-discovery event burst. */
-        const kateMatch = event && event.source &&
-            [...this._trackers.values()].some(t => t.pid === safePid(event.source));
+        /* Single cheap safePid call, then match against trackers
+         * without a second DBus query. Heartbeat every 50th event so
+         * we can tell a quiet listener apart from a dead one, and log
+         * every Kate-pid event in full. Uncapped so a long scroll
+         * session doesn't truncate silently. */
+        const sourcePid = safePid(event.source);
+        let kateMatch = false;
+        for (const t of this._trackers.values()) {
+            if (t.pid === sourcePid) { kateMatch = true; break; }
+        }
         if (kateMatch) {
             _agentDbg('KateTrackerManager._onAtspiEvent', 'kate-pid event', {
                 hypothesisId: 'H9b',
-                type: event?.type ?? null,
-                sourcePid: safePid(event.source),
+                type: event.type,
+                sourcePid,
                 sourceRole: safeRole(event.source),
             });
         } else {
             this._heartbeat = (this._heartbeat ?? 0) + 1;
-            if (this._heartbeat % 100 === 0) {
+            if (this._heartbeat % 50 === 0) {
                 _agentDbg('KateTrackerManager._onAtspiEvent', 'heartbeat', {
                     hypothesisId: 'H9b',
                     total: this._heartbeat,
-                    lastType: event?.type ?? null,
-                    lastPid: (event && event.source) ? safePid(event.source) : -1,
+                    lastType: event.type,
+                    lastPid: sourcePid,
                 });
             }
         }
         // #endregion
-        if (!event || !event.source) return;
         if (this._trackers.size === 0) return;
-
-        /* Fast pid prefilter: AT-SPI broadcasts events from every
-         * app; skipping non-Kate events at the top of the callback
-         * keeps the cost negligible for the 99% case. */
-        const evPid = safePid(event.source);
-        if (evPid <= 0) return;
-
-        let pidMatches = false;
-        for (const t of this._trackers.values()) {
-            if (t.pid === evPid) { pidMatches = true; break; }
-        }
-        if (!pidMatches) return;
+        if (!kateMatch || sourcePid <= 0) return;
 
         const type = event.type;
         for (const t of this._trackers.values()) {
-            if (t.pid !== evPid) continue;
+            if (t.pid !== sourcePid) continue;
             if (type === 'object:value-changed') {
                 if (t.handleValueChangedSource(event.source)) break;
             } else if (type === 'object:bounds-changed') {
