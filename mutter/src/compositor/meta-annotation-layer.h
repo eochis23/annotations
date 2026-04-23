@@ -23,6 +23,17 @@ ClutterActor *meta_annotation_layer_get_actor (MetaAnnotationLayer *layer);
 META_EXPORT
 void meta_annotation_layer_clear (MetaAnnotationLayer *layer);
 
+/* Drop the most recently finalized stroke. The target context is the
+ * anchor of the last completed stroke (unattached if that stroke had
+ * no anchor, or the corresponding per-window ink). No-op when there
+ * is no remembered stroke, when the remembered anchor's window has
+ * been unmanaged, or when the array has already been emptied (e.g.
+ * by an intervening Clear). Safe to call repeatedly; each call only
+ * pops one stroke because only end_stroke refills the remembered
+ * reference. */
+META_EXPORT
+void meta_annotation_layer_undo_last (MetaAnnotationLayer *layer);
+
 META_EXPORT
 void meta_annotation_layer_set_active (MetaAnnotationLayer *layer,
                                        gboolean          active);

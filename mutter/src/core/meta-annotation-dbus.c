@@ -40,6 +40,11 @@ handle_method_call (GDBusConnection       *connection,
       meta_annotation_layer_clear (dbus->layer);
       g_dbus_method_invocation_return_value (invocation, NULL);
     }
+  else if (g_strcmp0 (method_name, "UndoLast") == 0)
+    {
+      meta_annotation_layer_undo_last (dbus->layer);
+      g_dbus_method_invocation_return_value (invocation, NULL);
+    }
   else if (g_strcmp0 (method_name, "SetActive") == 0)
     {
       gboolean active;
@@ -109,6 +114,7 @@ static const gchar introspection_xml[] =
   "<node>"
   "  <interface name='org.gnome.Mutter.Annotation'>"
   "    <method name='Clear'/>"
+  "    <method name='UndoLast'/>"
   "    <method name='SetActive'>"
   "      <arg type='b' name='active' direction='in'/>"
   "    </method>"

@@ -178,6 +178,15 @@ struct _MetaAnnotationLayer
    * proximity mid-hold doesn't strand us in erase mode. */
   guint32 pen_barrel_buttons;
 
+  /* Anchor of the most-recently-begun ink stroke (NULL = unattached /
+   * desktop). Weak pointer, so window destruction nulls it
+   * automatically; last_ink_present disambiguates "last ink was on
+   * desktop" (TRUE + NULL anchor) from "nothing drawn yet or the last
+   * anchor was destroyed" (FALSE). Maintained by set_last_ink_anchor
+   * and consumed by meta_annotation_layer_undo_last. */
+  MetaWindow *last_ink_anchor;
+  gboolean    last_ink_present;
+
   /* Pending tap state: set on press/touch-begin, consumed on
    * release/touch-end to decide whether the interaction was brief +
    * stationary enough to count as a tap. */
@@ -227,6 +236,28 @@ set_stroke_anchor (MetaAnnotationLayer *layer, MetaWindow *anchor)
   if (layer->stroke_anchor)
     g_object_add_weak_pointer (G_OBJECT (layer->stroke_anchor),
                                (gpointer *) &layer->stroke_anchor);
+}
+
+/* Update the remembered "last ink stroke" target for undo. Anchor may
+ * be NULL to target unattached ink; `present` distinguishes valid
+ * targets from "nothing to undo". Uses the same weak-pointer dance as
+ * stroke_anchor so the pointer can't dangle. */
+static void
+set_last_ink_anchor (MetaAnnotationLayer *layer,
+                     MetaWindow          *anchor,
+                     gboolean             present)
+{
+  if (layer->last_ink_anchor != anchor)
+    {
+      if (layer->last_ink_anchor)
+        g_object_remove_weak_pointer (G_OBJECT (layer->last_ink_anchor),
+                                      (gpointer *) &layer->last_ink_anchor);
+      layer->last_ink_anchor = anchor;
+      if (layer->last_ink_anchor)
+        g_object_add_weak_pointer (G_OBJECT (layer->last_ink_anchor),
+                                   (gpointer *) &layer->last_ink_anchor);
+    }
+  layer->last_ink_present = present;
 }
 
 /* --------------- Chrome regions --------------- */
@@ -496,8 +527,11 @@ rasterize_all_strokes_with_ink (cairo_surface_t *target,
                ink->editor_w > 0.0f && ink->editor_h > 0.0f;
 
   /* Single shared context for non-follow strokes: identity transform,
-   * no clip, paints the full window-local surface. */
+   * no clip, paints the full window-local surface. ANTIALIAS_BEST
+   * chooses subpixel AA over cairo's default GRAY, measurably
+   * smoother on diagonal ink at low pressure widths. */
   cr_normal = cairo_create (target);
+  cairo_set_antialias (cr_normal, CAIRO_ANTIALIAS_BEST);
 
   /* Single shared context for follow strokes: clipped to the editor
    * region (so scrolled ink can't leak onto tabs / terminal / title
@@ -515,6 +549,7 @@ rasterize_all_strokes_with_ink (cairo_surface_t *target,
           if (s && s->follow_scroll)
             {
               cr_follow = cairo_create (target);
+              cairo_set_antialias (cr_follow, CAIRO_ANTIALIAS_BEST);
               cairo_rectangle (cr_follow,
                                ink->editor_x, ink->editor_y,
                                ink->editor_w, ink->editor_h);
@@ -870,6 +905,13 @@ on_window_unmanaged (MetaWindow *win, gpointer data)
        * dangles. */
       layer->current_stroke = NULL;
     }
+
+  /* The weak pointer would auto-null to NULL at finalize, but NULL is
+   * also "ink was drawn on the desktop" -- an undo trying to pop that
+   * would hit the wrong buffer. Clear `present` explicitly here so
+   * undo becomes a no-op until the user draws something new. */
+  if (layer->last_ink_anchor == win)
+    set_last_ink_anchor (layer, NULL, FALSE);
 
   /* A tap gesture in flight that references this window is now
    * ambiguous; drop the whole history rather than leave dangling
@@ -1243,8 +1285,9 @@ meta_annotation_layer_destroy (MetaAnnotationLayer *layer)
       layer->recompose_idle_id = 0;
     }
 
-  /* Drop weak reference before the window hash is torn down. */
+  /* Drop weak references before the window hash is torn down. */
   set_stroke_anchor (layer, NULL);
+  set_last_ink_anchor (layer, NULL, FALSE);
   layer->stroke_active = FALSE;
   layer->current_stroke = NULL;
 
@@ -1320,11 +1363,82 @@ meta_annotation_layer_clear (MetaAnnotationLayer *layer)
 
   layer->stroke_active = FALSE;
   set_stroke_anchor (layer, NULL);
+  /* Nothing left to undo after a full wipe. */
+  set_last_ink_anchor (layer, NULL, FALSE);
 
   /* An already-queued idle would fire later and re-upload the same
    * cleared composite. Drop it; we compose synchronously below. */
   g_clear_handle_id (&layer->recompose_idle_id, g_source_remove);
   recompose (layer);
+}
+
+void
+meta_annotation_layer_undo_last (MetaAnnotationLayer *layer)
+{
+  GPtrArray *strokes = NULL;
+  cairo_surface_t *target = NULL;
+  WindowInk *ink = NULL;
+
+  g_return_if_fail (layer != NULL);
+
+  if (!layer->last_ink_present)
+    return;
+
+  if (layer->last_ink_anchor)
+    {
+      ink = g_hash_table_lookup (layer->per_window, layer->last_ink_anchor);
+      if (ink)
+        {
+          strokes = ink->strokes;
+          target = ink->surface;
+        }
+    }
+  else
+    {
+      strokes = layer->unattached_strokes;
+      target = layer->unattached_surface;
+    }
+
+  if (!strokes || strokes->len == 0)
+    {
+      /* Window gone but weak ptr said otherwise, or strokes were
+       * drained by a prior erase / clear. Drop the remembered ref
+       * so subsequent undos don't keep looking. */
+      set_last_ink_anchor (layer, NULL, FALSE);
+      schedule_recompose (layer);
+      return;
+    }
+
+  /* If an ink stroke is still in flight on this target, severing the
+   * pointer now stops continue_stroke from appending into an array
+   * whose last element is about to vanish. */
+  if (layer->stroke_active &&
+      layer->stroke_anchor == layer->last_ink_anchor)
+    {
+      layer->stroke_active = FALSE;
+      layer->current_stroke = NULL;
+      layer->stroke_follow_scroll = FALSE;
+      set_stroke_anchor (layer, NULL);
+    }
+
+  g_ptr_array_remove_index (strokes, strokes->len - 1);
+
+  if (ink)
+    rasterize_all_strokes_with_ink (target, strokes, ink);
+  else
+    rasterize_all_strokes (target, strokes);
+
+  /* Consecutive undos keep peeling from the same target (the user's
+   * most recently drawn context); when it runs dry we clear the
+   * remembered ref so further undos are no-ops until new ink is
+   * drawn. Undo does NOT chase back into other anchors the user
+   * previously drew on -- keeping undo's target stable per press
+   * makes it predictable even with a multi-window session, at the
+   * cost of not being a full global undo stack. */
+  if (strokes->len == 0)
+    set_last_ink_anchor (layer, NULL, FALSE);
+
+  schedule_recompose (layer);
 }
 
 static void
@@ -1374,6 +1488,10 @@ meta_annotation_layer_set_active (MetaAnnotationLayer *layer,
     {
       layer->pen_barrel_buttons = 0;
       layer->current_stroke = NULL;
+      /* Undo across an active->inactive->active cycle would be
+       * confusing (the remembered stroke may have been drawn in a
+       * different session); start fresh each time. */
+      set_last_ink_anchor (layer, NULL, FALSE);
     }
   update_actor_visibility (layer);
 }
@@ -2094,6 +2212,11 @@ begin_stroke (MetaAnnotationLayer *layer, float stage_x, float stage_y,
   if (erase)
     return;
 
+  /* This press is committing to ink mode. From here on, UndoLast
+   * targets this anchor (or unattached if anchor is NULL) until the
+   * user draws another ink stroke, clears, or the anchor dies. */
+  set_last_ink_anchor (layer, anchor, TRUE);
+
   stroke_target (layer, &target, &strokes);
   if (!strokes)
     return;
@@ -2180,6 +2303,7 @@ continue_stroke (MetaAnnotationLayer *layer, float stage_x, float stage_y,
        * a scroll reproduce the stroke in the right place. */
       {
         cairo_t *cr = cairo_create (target);
+        cairo_set_antialias (cr, CAIRO_ANTIALIAS_BEST);
         draw_segment_on_cr (cr, layer->rgba,
                             layer->stroke_last_x, layer->stroke_last_y,
                             lx, ly,
@@ -2274,6 +2398,12 @@ clear_ink_for_anchor (MetaAnnotationLayer *layer, MetaWindow *anchor)
       layer->current_stroke = NULL;
       set_stroke_anchor (layer, NULL);
     }
+
+  /* Same reasoning as meta_annotation_layer_clear: the stroke that
+   * UndoLast would have targeted is now gone. */
+  if (layer->last_ink_anchor == anchor ||
+      (!anchor && layer->last_ink_present && !layer->last_ink_anchor))
+    set_last_ink_anchor (layer, NULL, FALSE);
 
   schedule_recompose (layer);
 }
