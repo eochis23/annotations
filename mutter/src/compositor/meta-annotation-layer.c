@@ -15,21 +15,6 @@
 #include <glib.h>
 #include <math.h>
 
-/* #region agent log */
-static void
-annotation_agent_log (const char *hypothesis_id,
-                      const char *location,
-                      const char *message,
-                      int           a,
-                      int           b,
-                      int           c,
-                      int           d)
-{
-  meta_annotation_debug_append_ndjson (hypothesis_id, location, message, a, b, c, d);
-}
-
-/* #endregion */
-
 struct _MetaAnnotationLayer
 {
   MetaBackend *backend;
@@ -77,21 +62,6 @@ sync_texture_from_surface (MetaAnnotationLayer *layer)
    * free the CoglTexture between calls; keep a ref for the whole upload (coredump:
    * SIGSEGV in COGL_IS_TEXTURE / cogl_texture_get_width from sync_texture_from_surface). */
   g_object_ref (tex);
-
-  /* #region agent log */
-  {
-    int cw = cairo_image_surface_get_width (layer->surface);
-    int ch = cairo_image_surface_get_height (layer->surface);
-    int tw = (int) cogl_texture_get_width (tex);
-    int th = (int) cogl_texture_get_height (tex);
-
-    annotation_agent_log ("H_texture", "meta-annotation-layer.c:sync",
-                          "cairo_vs_cogl", cw, ch, tw, th);
-    if (cw != tw || ch != th)
-      annotation_agent_log ("H_texture", "meta-annotation-layer.c:sync",
-                            "size_mismatch_warn_still_upload", cw, ch, tw, th);
-  }
-  /* #endregion */
 
   stride = cairo_image_surface_get_stride (layer->surface);
   data = cairo_image_surface_get_data (layer->surface);
@@ -187,11 +157,6 @@ on_stage_size_changed (ClutterActor         *stage,
   width = (int) ceilf (width_f);
   height = (int) ceilf (height_f);
 
-  /* #region agent log */
-  annotation_agent_log ("H_reentrancy", "meta-annotation-layer.c:on_stage_size_changed",
-                        "stage_wh", width, height, 0, 0);
-  /* #endregion */
-
   recreate_buffers (layer, width, height);
   layer->stroke_active = FALSE;
 }
@@ -244,12 +209,6 @@ meta_annotation_layer_destroy (MetaAnnotationLayer *layer)
 
   meta_annotation_input_set_non_mouse_pointer_isolated (FALSE);
 
-  /* #region agent log */
-  annotation_agent_log ("H_destroy", "meta-annotation-layer.c:destroy",
-                        "enter", layer->actor ? 1 : 0,
-                        layer->surface ? 1 : 0, 0, 0);
-  /* #endregion */
-
   stage = meta_backend_get_stage (layer->backend);
 
   g_clear_signal_handler (&layer->width_notify_id, stage);
@@ -281,30 +240,7 @@ void
 meta_annotation_layer_set_active (MetaAnnotationLayer *layer,
                                    gboolean            active)
 {
-  static gboolean logged_prev = (gboolean) 2;
-
   g_return_if_fail (layer != NULL);
-
-  if (logged_prev == (gboolean) 2 || logged_prev != active)
-    {
-      logged_prev = active;
-      /* H_parent: is the layer actor parented into a scene graph? Without a parent
-       * (e.g. stock gnome-shell which doesn't call get_annotation_layer), show()
-       * and queue_redraw() are silent — nothing renders. */
-      ClutterActor *parent = layer->actor ? clutter_actor_get_parent (layer->actor) : NULL;
-      ClutterActor *stage = meta_backend_get_stage (layer->backend);
-      float aw = 0, ah = 0;
-      if (layer->actor)
-        clutter_actor_get_size (layer->actor, &aw, &ah);
-      g_message ("annotation layer: da8410 H_parent SetActive %s surface=%p actor=%p parent=%p parent_name=%s is_stage=%d size=%.0fx%.0f",
-                 active ? "true" : "false",
-                 (void *) layer->surface,
-                 (void *) layer->actor,
-                 (void *) parent,
-                 parent ? (clutter_actor_get_name (parent) ?: "(unnamed)") : "(none)",
-                 parent != NULL && parent == stage ? 1 : 0,
-                 aw, ah);
-    }
 
   layer->active = active;
   meta_annotation_input_set_non_mouse_pointer_isolated (active);
@@ -321,8 +257,6 @@ meta_annotation_layer_set_active (MetaAnnotationLayer *layer,
               /* NULL sibling = insert at the very top of the child list so the layer
                * renders above uiGroup/windows even when the shell fork is absent. */
               clutter_actor_insert_child_above (stage, layer->actor, NULL);
-              g_message ("annotation layer: da8410 H_parent fallback_parented_to_stage actor=%p stage=%p",
-                         (void *) layer->actor, (void *) stage);
             }
         }
 
@@ -367,13 +301,6 @@ draw_segment (MetaAnnotationLayer *layer,
 
   if (!layer->surface)
     return;
-
-  /* #region agent log */
-  annotation_agent_log ("H_coords", "meta-annotation-layer.c:draw_segment",
-                        "line",
-                        (int) floorf (x1), (int) floorf (y1),
-                        (int) floorf (x2), (int) floorf (y2));
-  /* #endregion */
 
   cr = cairo_create (layer->surface);
   cairo_set_source_rgba (cr,
@@ -443,18 +370,6 @@ meta_annotation_layer_handle_event (MetaAnnotationLayer *layer,
 
   type = clutter_event_type (event);
 
-  /* #region agent log */
-  {
-    ClutterInputDevice *dev = clutter_event_get_source_device (event);
-    int dtype = dev ? (int) clutter_input_device_get_device_type (dev) : -1;
-
-    annotation_agent_log ("H_pen_path", "meta-annotation-layer.c:handle_event",
-                          "entry", (int) type, dtype,
-                          layer->stroke_active ? 1 : 0,
-                          pointer_has_draw_button (event) ? 1 : 0);
-  }
-  /* #endregion */
-
   switch (type)
     {
     case CLUTTER_BUTTON_PRESS:
@@ -476,18 +391,6 @@ meta_annotation_layer_handle_event (MetaAnnotationLayer *layer,
         gboolean pressure_tip = motion_has_tablet_pressure (event);
         gboolean btn = pointer_has_draw_button (event);
 
-        /* #region agent log */
-        {
-          static guint motion_counter = 0;
-          if ((++motion_counter % 40) == 1)
-            g_message ("annotation-layer: da8410 H_draw motion "
-                       "stroke=%d btn=%d pressure_tip=%d surface=%p",
-                       layer->stroke_active ? 1 : 0,
-                       btn ? 1 : 0, pressure_tip ? 1 : 0,
-                       (void *) layer->surface);
-        }
-        /* #endregion */
-
         if (!layer->stroke_active && !btn && !pressure_tip)
           return TRUE;
 
@@ -502,15 +405,6 @@ meta_annotation_layer_handle_event (MetaAnnotationLayer *layer,
 
         if (layer->stroke_active)
           {
-            /* #region agent log */
-            {
-              static guint segdraw_counter = 0;
-              if ((++segdraw_counter % 40) == 1)
-                g_message ("annotation-layer: da8410 H_draw segment "
-                           "from=(%.0f,%.0f) to=(%.0f,%.0f)",
-                           layer->last_x, layer->last_y, pos.x, pos.y);
-            }
-            /* #endregion */
             draw_segment (layer, layer->last_x, layer->last_y, pos.x, pos.y);
             layer->last_x = pos.x;
             layer->last_y = pos.y;

@@ -1811,85 +1811,15 @@ meta_compositor_route_annotation_event (MetaCompositor    *compositor,
 {
   MetaCompositorPrivate *priv =
     meta_compositor_get_instance_private (compositor);
-  ClutterEventType et;
-  int dtype = -1;
-  gboolean overlay;
-  gboolean handled;
-
-  et = clutter_event_type (event);
-  {
-    ClutterInputDevice *dev = clutter_event_get_source_device (event);
-
-    if (dev)
-      dtype = (int) clutter_input_device_get_device_type (dev);
-  }
-  overlay = meta_annotation_event_targets_overlay (event);
-
-  /* #region agent log */
-  {
-    static guint route_entry_counter = 0;
-    if (et == CLUTTER_MOTION && (++route_entry_counter % 40) == 1)
-      g_message ("annotation-route: da8410 H_dispatch entry "
-                 "et=%d dtype=%d overlay=%d has_layer=%d active=%d",
-                 (int) et, dtype, overlay ? 1 : 0,
-                 priv->annotation_layer ? 1 : 0,
-                 (priv->annotation_layer &&
-                  meta_annotation_layer_get_active (priv->annotation_layer))
-                 ? 1 : 0);
-  }
-  /* #endregion */
 
   if (!priv->annotation_layer)
-    {
-      /* #region agent log */
-      if (et == CLUTTER_TOUCH_BEGIN || et == CLUTTER_TOUCH_UPDATE ||
-          et == CLUTTER_MOTION)
-        meta_annotation_debug_append_ndjson ("H_route", "compositor.c:route_annotation",
-                                             "no_annotation_layer", (int) et, dtype, overlay ? 1 : 0, 0);
-      /* #endregion */
-      return FALSE;
-    }
+    return FALSE;
 
   if (!meta_annotation_layer_get_active (priv->annotation_layer))
-    {
-      /* #region agent log */
-      if (et == CLUTTER_TOUCH_BEGIN || et == CLUTTER_TOUCH_UPDATE ||
-          et == CLUTTER_MOTION)
-        meta_annotation_debug_append_ndjson ("H_route", "compositor.c:route_annotation",
-                                             "annotation_inactive", (int) et, dtype, overlay ? 1 : 0, 0);
-      /* #endregion */
-      return FALSE;
-    }
+    return FALSE;
 
-  if (!overlay)
-    {
-      /* #region agent log */
-      if (et == CLUTTER_TOUCH_BEGIN || et == CLUTTER_TOUCH_UPDATE ||
-          et == CLUTTER_MOTION)
-        meta_annotation_debug_append_ndjson ("H_route", "compositor.c:route_annotation",
-                                             "not_targets_overlay", (int) et, dtype, 0, 0);
-      /* #endregion */
-      return FALSE;
-    }
+  if (!meta_annotation_event_targets_overlay (event))
+    return FALSE;
 
-  handled = meta_annotation_layer_handle_event (priv->annotation_layer, event);
-
-  /* #region agent log */
-  {
-    static guint route_handled_counter = 0;
-    if (et == CLUTTER_MOTION && (++route_handled_counter % 40) == 1)
-      g_message ("annotation-route: da8410 H_dispatch handled "
-                 "et=%d dtype=%d handled=%d",
-                 (int) et, dtype, handled ? 1 : 0);
-  }
-  /* #endregion */
-
-  /* #region agent log */
-  if (et == CLUTTER_TOUCH_BEGIN || et == CLUTTER_TOUCH_UPDATE ||
-      et == CLUTTER_TOUCH_END || et == CLUTTER_MOTION)
-    meta_annotation_debug_append_ndjson ("H_route", "compositor.c:route_annotation",
-                                         "routed_to_layer", (int) et, dtype, overlay ? 1 : 0, handled ? 1 : 0);
-  /* #endregion */
-
-  return handled;
+  return meta_annotation_layer_handle_event (priv->annotation_layer, event);
 }

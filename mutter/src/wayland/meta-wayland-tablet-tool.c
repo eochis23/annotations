@@ -128,10 +128,10 @@ meta_wayland_tablet_tool_update_cursor (MetaWaylandTabletTool *tool)
   MetaBackend *backend = backend_from_tool (tool);
   ClutterBackend *clutter_backend = meta_backend_get_clutter_backend (backend);
   g_autoptr (ClutterCursor) cursor = NULL;
-  /* G_default_cursor_arrow: when the annotation overlay is active, the pen is
-   * over our Clutter actor (no wayland focus_surface), so the existing fallback
-   * picks CLUTTER_CURSOR_DEFAULT — that's the "second cursor" the user sees,
-   * which lingers near (0,0) on proximity-out. Hide it. */
+  /* When the annotation overlay is active, the pen is over our Clutter actor
+   * (no wayland focus_surface), so the existing fallback picks
+   * CLUTTER_CURSOR_DEFAULT — that's a second cursor that lingers near (0,0) on
+   * proximity-out. Hide it. */
   gboolean annotation_isolated = meta_annotation_input_get_non_mouse_pointer_isolated ();
 
   if (tool->focus_surface)
@@ -169,20 +169,6 @@ meta_wayland_tablet_tool_update_cursor (MetaWaylandTabletTool *tool)
                                              ? CLUTTER_CURSOR_NONE
                                              : CLUTTER_CURSOR_DEFAULT);
     }
-
-  /* #region agent log */
-  {
-    static guint update_cursor_log = 0;
-    if ((++update_cursor_log % 25) == 1)
-      g_message ("annotation-tablet: da8410 G_default_cursor_arrow update_cursor "
-                 "focus_surface=%p current=%p source=%d isolated=%d cursor=%p",
-                 (void *) tool->focus_surface,
-                 (void *) tool->current,
-                 (int) tool->cursor_source,
-                 annotation_isolated ? 1 : 0,
-                 (void *) cursor);
-  }
-  /* #endregion */
 
   if (g_set_object (&tool->cursor, cursor))
     {
@@ -935,14 +921,6 @@ meta_wayland_tablet_tool_update (MetaWaylandTabletTool *tool,
       meta_wayland_tablet_update_sprite (tool->current_tablet, event);
       break;
     case CLUTTER_PROXIMITY_OUT:
-      /* #region agent log */
-      g_message ("annotation-tablet: da8410 G_default_cursor_arrow proximity_out "
-                 "tablet=%p sprite=%p focus=%p isolated=%d",
-                 (void *) tool->current_tablet,
-                 (void *) (tool->current_tablet ? tool->current_tablet->sprite : NULL),
-                 (void *) tool->focus_surface,
-                 meta_annotation_input_get_non_mouse_pointer_isolated () ? 1 : 0);
-      /* #endregion */
       meta_wayland_tablet_update_sprite (tool->current_tablet, NULL);
       tool->current_tablet = NULL;
       meta_wayland_tablet_tool_set_current_surface (tool, NULL);
