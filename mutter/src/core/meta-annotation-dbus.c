@@ -56,6 +56,19 @@ handle_method_call (GDBusConnection       *connection,
       meta_annotation_layer_set_color (dbus->layer, r, g, b, a);
       g_dbus_method_invocation_return_value (invocation, NULL);
     }
+  else if (g_strcmp0 (method_name, "SetChromeRegions") == 0)
+    {
+      g_autoptr (GVariant) regions = NULL;
+
+      g_variant_get (parameters, "(@a(siiii))", &regions);
+      meta_annotation_layer_set_chrome_regions (dbus->layer, regions);
+      g_dbus_method_invocation_return_value (invocation, NULL);
+    }
+  else if (g_strcmp0 (method_name, "ClearChromeRegions") == 0)
+    {
+      meta_annotation_layer_clear_chrome_regions (dbus->layer);
+      g_dbus_method_invocation_return_value (invocation, NULL);
+    }
   else
     {
       g_dbus_method_invocation_return_error (invocation,
@@ -78,6 +91,14 @@ static const gchar introspection_xml[] =
   "      <arg type='d' name='b' direction='in'/>"
   "      <arg type='d' name='a' direction='in'/>"
   "    </method>"
+  "    <method name='SetChromeRegions'>"
+  "      <arg type='a(siiii)' name='regions' direction='in'/>"
+  "    </method>"
+  "    <method name='ClearChromeRegions'/>"
+  "    <signal name='RegionActivated'>"
+  "      <arg type='s' name='id'/>"
+  "      <arg type='s' name='kind'/>"
+  "    </signal>"
   "  </interface>"
   "</node>";
 
@@ -183,4 +204,28 @@ meta_annotation_dbus_free (MetaAnnotationDBus *dbus)
 
   g_clear_object (&dbus->connection);
   g_free (dbus);
+}
+
+void
+meta_annotation_dbus_emit_region_activated (MetaAnnotationDBus *dbus,
+                                            const char         *id,
+                                            const char         *kind)
+{
+  GError *local_error = NULL;
+
+  if (!dbus || !dbus->connection || !id || !kind)
+    return;
+
+  if (!g_dbus_connection_emit_signal (dbus->connection,
+                                      NULL,
+                                      "/org/gnome/Mutter/Annotation",
+                                      "org.gnome.Mutter.Annotation",
+                                      "RegionActivated",
+                                      g_variant_new ("(ss)", id, kind),
+                                      &local_error))
+    {
+      g_warning ("annotation-dbus: emit RegionActivated failed: %s",
+                 local_error->message);
+      g_clear_error (&local_error);
+    }
 }

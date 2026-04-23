@@ -14,6 +14,31 @@
 #include <cairo.h>
 #include <glib.h>
 #include <math.h>
+#include <stdio.h>
+
+/* #region agent log */
+static void
+dbg_log (const char *location, const char *hypothesis, const char *msg_json,
+         const char *data_json)
+{
+  FILE *f = fopen ("/home/eochis/Projects/annotations/.cursor/debug-da8410.log", "a");
+  if (!f)
+    return;
+  fprintf (f,
+           "{\"sessionId\":\"da8410\",\"hypothesisId\":\"%s\","
+           "\"location\":\"%s\",\"message\":%s,\"data\":%s,"
+           "\"timestamp\":%lld}\n",
+           hypothesis, location, msg_json, data_json,
+           (long long) (g_get_real_time () / 1000));
+  fclose (f);
+}
+/* #endregion */
+
+typedef struct _ChromeRegion
+{
+  char *id;
+  graphene_rect_t rect;
+} ChromeRegion;
 
 struct _MetaAnnotationLayer
 {
@@ -27,7 +52,31 @@ struct _MetaAnnotationLayer
   gboolean stroke_active;
   gulong width_notify_id;
   gulong height_notify_id;
+
+  /* Chrome regions published by the shell extension. */
+  GArray *chrome_regions;
+  /* Tracks an in-flight chrome press so motion events between press and
+   * release don't accidentally start an ink stroke. */
+  char *chrome_press_id;
 };
+
+static void
+chrome_region_clear (gpointer data)
+{
+  ChromeRegion *r = data;
+  g_clear_pointer (&r->id, g_free);
+}
+
+static GArray *
+ensure_chrome_regions (MetaAnnotationLayer *layer)
+{
+  if (!layer->chrome_regions)
+    {
+      layer->chrome_regions = g_array_new (FALSE, FALSE, sizeof (ChromeRegion));
+      g_array_set_clear_func (layer->chrome_regions, chrome_region_clear);
+    }
+  return layer->chrome_regions;
+}
 
 static CoglTexture *
 get_cogl_texture (MetaAnnotationLayer *layer)
@@ -216,6 +265,8 @@ meta_annotation_layer_destroy (MetaAnnotationLayer *layer)
 
   g_clear_pointer (&layer->surface, cairo_surface_destroy);
   g_clear_pointer (&layer->actor, clutter_actor_destroy);
+  g_clear_pointer (&layer->chrome_regions, g_array_unref);
+  g_clear_pointer (&layer->chrome_press_id, g_free);
   g_clear_object (&layer->backend);
 
   g_free (layer);
@@ -456,4 +507,119 @@ meta_annotation_layer_handle_event (MetaAnnotationLayer *layer,
     default:
       return FALSE;
     }
+}
+
+void
+meta_annotation_layer_set_chrome_regions (MetaAnnotationLayer *layer,
+                                          GVariant            *regions)
+{
+  GArray *arr;
+  GVariantIter iter;
+  const char *id;
+  gint32 x, y, w, h;
+
+  g_return_if_fail (layer != NULL);
+
+  arr = ensure_chrome_regions (layer);
+  g_array_set_size (arr, 0);
+
+  if (!regions)
+    return;
+
+  g_variant_iter_init (&iter, regions);
+  while (g_variant_iter_loop (&iter, "(&siiii)", &id, &x, &y, &w, &h))
+    {
+      ChromeRegion r;
+
+      if (w <= 0 || h <= 0 || !id)
+        continue;
+
+      r.id = g_strdup (id);
+      graphene_rect_init (&r.rect, (float) x, (float) y, (float) w, (float) h);
+      g_array_append_val (arr, r);
+
+      /* #region agent log */
+      {
+        char data[256];
+        snprintf (data, sizeof data,
+                  "{\"id\":\"%s\",\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d}",
+                  id, x, y, w, h);
+        dbg_log ("meta-annotation-layer.c:set_chrome_regions", "H1",
+                 "\"stored region\"", data);
+      }
+      /* #endregion */
+    }
+
+  /* #region agent log */
+  {
+    char data[128];
+    snprintf (data, sizeof data, "{\"count\":%u}", arr->len);
+    dbg_log ("meta-annotation-layer.c:set_chrome_regions", "H1",
+             "\"regions set total\"", data);
+  }
+  /* #endregion */
+}
+
+void
+meta_annotation_layer_clear_chrome_regions (MetaAnnotationLayer *layer)
+{
+  g_return_if_fail (layer != NULL);
+
+  if (layer->chrome_regions)
+    g_array_set_size (layer->chrome_regions, 0);
+  g_clear_pointer (&layer->chrome_press_id, g_free);
+}
+
+const char *
+meta_annotation_layer_pick_chrome_region (MetaAnnotationLayer *layer,
+                                          float                x,
+                                          float                y)
+{
+  g_return_val_if_fail (layer != NULL, NULL);
+
+  if (!layer->chrome_regions || layer->chrome_regions->len == 0)
+    return NULL;
+
+  /* Iterate top-to-bottom: later-added regions sit visually above earlier
+   * ones, so they should hit-test first. */
+  for (guint i = layer->chrome_regions->len; i-- > 0;)
+    {
+      ChromeRegion *r = &g_array_index (layer->chrome_regions, ChromeRegion, i);
+      graphene_point_t p;
+
+      graphene_point_init (&p, x, y);
+      if (graphene_rect_contains_point (&r->rect, &p))
+        return r->id;
+    }
+
+  return NULL;
+}
+
+void
+meta_annotation_layer_set_chrome_press_active (MetaAnnotationLayer *layer,
+                                               const char          *id)
+{
+  g_return_if_fail (layer != NULL);
+
+  g_clear_pointer (&layer->chrome_press_id, g_free);
+  if (id)
+    layer->chrome_press_id = g_strdup (id);
+}
+
+gboolean
+meta_annotation_layer_chrome_press_active (MetaAnnotationLayer *layer,
+                                           const char         **id_out)
+{
+  g_return_val_if_fail (layer != NULL, FALSE);
+
+  if (id_out)
+    *id_out = layer->chrome_press_id;
+  return layer->chrome_press_id != NULL;
+}
+
+void
+meta_annotation_layer_clear_chrome_press (MetaAnnotationLayer *layer)
+{
+  g_return_if_fail (layer != NULL);
+  g_clear_pointer (&layer->chrome_press_id, g_free);
 }

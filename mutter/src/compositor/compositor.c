@@ -1811,6 +1811,9 @@ meta_compositor_route_annotation_event (MetaCompositor    *compositor,
 {
   MetaCompositorPrivate *priv =
     meta_compositor_get_instance_private (compositor);
+  ClutterEventType type;
+  const char *pressed_id = NULL;
+  gboolean press_active;
 
   if (!priv->annotation_layer)
     return FALSE;
@@ -1820,6 +1823,110 @@ meta_compositor_route_annotation_event (MetaCompositor    *compositor,
 
   if (!meta_annotation_event_targets_overlay (event))
     return FALSE;
+
+  type = clutter_event_type (event);
+  press_active = meta_annotation_layer_chrome_press_active (priv->annotation_layer,
+                                                            &pressed_id);
+
+  /* #region agent log */
+  if (type == CLUTTER_BUTTON_PRESS || type == CLUTTER_BUTTON_RELEASE ||
+      type == CLUTTER_TOUCH_BEGIN  || type == CLUTTER_TOUCH_END ||
+      type == CLUTTER_TOUCH_CANCEL)
+    {
+      FILE *f = fopen ("/home/eochis/Projects/annotations/.cursor/debug-da8410.log", "a");
+      if (f)
+        {
+          float lx = 0, ly = 0;
+          clutter_event_get_coords (event, &lx, &ly);
+          fprintf (f,
+                   "{\"sessionId\":\"da8410\",\"hypothesisId\":\"H3\","
+                   "\"location\":\"compositor.c:route_annotation_event:enter\","
+                   "\"message\":\"routing event\","
+                   "\"data\":{\"type\":%d,\"x\":%.2f,\"y\":%.2f,\"press_active\":%d},"
+                   "\"timestamp\":%lld}\n",
+                   (int) type, lx, ly, press_active ? 1 : 0,
+                   (long long) (g_get_real_time () / 1000));
+          fclose (f);
+        }
+    }
+  /* #endregion */
+
+  /* Synthetic dock activation: hit-test chrome regions on press, emit
+   * RegionActivated, and consume the press so no ink stroke begins. */
+  if (type == CLUTTER_BUTTON_PRESS || type == CLUTTER_TOUCH_BEGIN)
+    {
+      graphene_point_t p;
+      const char *id;
+
+      clutter_event_get_coords (event, &p.x, &p.y);
+      id = meta_annotation_layer_pick_chrome_region (priv->annotation_layer,
+                                                     p.x, p.y);
+      /* #region agent log */
+      {
+        FILE *f = fopen ("/home/eochis/Projects/annotations/.cursor/debug-da8410.log", "a");
+        if (f)
+          {
+            fprintf (f,
+                     "{\"sessionId\":\"da8410\",\"hypothesisId\":\"H2+H3+H4\","
+                     "\"location\":\"compositor.c:route_annotation_event:press\","
+                     "\"message\":\"press hit-test\","
+                     "\"data\":{\"type\":%d,\"x\":%.2f,\"y\":%.2f,\"picked\":\"%s\"},"
+                     "\"timestamp\":%lld}\n",
+                     (int) type, p.x, p.y, id ? id : "",
+                     (long long) (g_get_real_time () / 1000));
+            fclose (f);
+          }
+      }
+      /* #endregion */
+      if (id)
+        {
+          const char *kind = (type == CLUTTER_BUTTON_PRESS) ? "press"
+                                                            : "touch-begin";
+
+          meta_annotation_layer_set_chrome_press_active (priv->annotation_layer,
+                                                         id);
+          meta_annotation_dbus_emit_region_activated (priv->annotation_dbus,
+                                                      id, kind);
+          return TRUE;
+        }
+    }
+
+  /* While a chrome press is in flight, swallow all subsequent events from
+   * this stroke so dragging off the dock can't begin or extend an ink
+   * stroke. The press's matching release/touch-end terminates the
+   * suppression and emits "release" only if it lands on the same region. */
+  if (press_active)
+    {
+      switch (type)
+        {
+        case CLUTTER_BUTTON_RELEASE:
+        case CLUTTER_TOUCH_END:
+        case CLUTTER_TOUCH_CANCEL:
+          {
+            graphene_point_t p;
+            const char *id;
+
+            clutter_event_get_coords (event, &p.x, &p.y);
+            id = meta_annotation_layer_pick_chrome_region (priv->annotation_layer,
+                                                           p.x, p.y);
+            if (id && pressed_id && g_strcmp0 (id, pressed_id) == 0 &&
+                type != CLUTTER_TOUCH_CANCEL)
+              {
+                const char *kind = (type == CLUTTER_BUTTON_RELEASE) ? "release"
+                                                                    : "touch-end";
+
+                meta_annotation_dbus_emit_region_activated (priv->annotation_dbus,
+                                                            id, kind);
+              }
+            meta_annotation_layer_clear_chrome_press (priv->annotation_layer);
+            return TRUE;
+          }
+
+        default:
+          /* MOTION / TOUCH_UPDATE / etc.: consume silently. */
+          return TRUE;
+        }
+    }
 
   return meta_annotation_layer_handle_event (priv->annotation_layer, event);
 }

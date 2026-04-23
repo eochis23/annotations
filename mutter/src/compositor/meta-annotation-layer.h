@@ -38,3 +38,37 @@ void meta_annotation_layer_set_color (MetaAnnotationLayer *layer,
 META_EXPORT
 gboolean meta_annotation_layer_handle_event (MetaAnnotationLayer *layer,
                                              const ClutterEvent *event);
+
+/* Chrome regions: rectangles in stage coordinates published by the shell
+ * extension that mark where the dock buttons live. Press/release events that
+ * land inside a region are converted by the compositor into RegionActivated
+ * D-Bus signals instead of ink strokes (synthetic dock activation). */
+
+META_EXPORT
+void meta_annotation_layer_set_chrome_regions (MetaAnnotationLayer *layer,
+                                               GVariant            *regions);
+
+META_EXPORT
+void meta_annotation_layer_clear_chrome_regions (MetaAnnotationLayer *layer);
+
+/* Returns the id of the topmost (last-set) region containing (x, y), or
+ * NULL if none. The returned string is owned by the layer and remains valid
+ * until the next set/clear call. */
+META_EXPORT
+const char *meta_annotation_layer_pick_chrome_region (MetaAnnotationLayer *layer,
+                                                      float                x,
+                                                      float                y);
+
+/* Per-stroke "press consumed by chrome" tracking, used by the compositor
+ * routing path so motion events arriving between a chrome press and its
+ * release don't open an ink stroke if the user drags off the dock. */
+META_EXPORT
+void meta_annotation_layer_set_chrome_press_active (MetaAnnotationLayer *layer,
+                                                    const char          *id);
+
+META_EXPORT
+gboolean meta_annotation_layer_chrome_press_active (MetaAnnotationLayer *layer,
+                                                    const char         **id_out);
+
+META_EXPORT
+void meta_annotation_layer_clear_chrome_press (MetaAnnotationLayer *layer);
