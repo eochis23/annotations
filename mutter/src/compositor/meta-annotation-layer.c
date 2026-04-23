@@ -26,11 +26,17 @@
 /* Libinput reports tilt in degrees. Wacom tablets top out around 60 deg;
  * divide by this to normalize magnitude to [0, 1]. */
 #define ANNOT_TILT_DEG_FULL 60.0f
-/* How much tilt can widen the stroke. 1.5 => up to 2.5x width at full tilt. */
-#define ANNOT_TILT_WIDTH_BOOST 1.5f
-/* Erase-mode stroke width is this much wider than ink at the same
- * pressure / tilt so the eraser feels usable at normal BASE_WIDTH. */
+/* How much tilt can widen the stroke. 1.875 => up to ~2.875x width at
+ * full tilt (25% stronger than the initial 1.5). */
+#define ANNOT_TILT_WIDTH_BOOST 1.875f
+/* Erase-mode cursor "footprint" is this much bigger than an ink stroke
+ * of the same pressure / tilt; the eraser deletes any stroke whose
+ * geometry touches this footprint. */
 #define ANNOT_ERASE_WIDTH_FACTOR 2.0f
+/* Minimum eraser hit radius, in surface-local pixels. Applies when
+ * pressure is unknown or extremely low so a barrel-held drag still
+ * gathers strokes rather than silently missing everything. */
+#define ANNOT_ERASE_MIN_RADIUS   8.0f
 
 /* Tap-to-clear gesture thresholds. */
 #define TAP_HISTORY_SIZE      4
@@ -51,10 +57,35 @@ typedef struct _ChromeRegion
   graphene_rect_t rect;
 } ChromeRegion;
 
+/* A single point recorded along a stroke. Coordinates are in the
+ * containing surface's local space (window-local for WindowInk,
+ * stage-local for unattached). */
+typedef struct _InkPoint
+{
+  float x, y;
+  float pressure;     /* raw pressure, [0, 1]; 1 for mouse / no-pressure input */
+  float tilt_factor;  /* >= 1, matches event_get_tilt_factor output */
+} InkPoint;
+
+/* A full ink stroke stored as a polyline. Rasterized into the owning
+ * surface at draw time; kept around so the erase hit-test can delete it
+ * wholesale. */
+typedef struct _Stroke
+{
+  GArray *points;    /* InkPoint */
+  float rgba[4];     /* color at the time the stroke was drawn */
+
+  /* Axis-aligned bbox over all points, pre-expanded by half the max
+   * possible stroke width so it's safe to use as a broad-phase reject
+   * box for the erase hit-test. Updated incrementally on append. */
+  float bbox_min_x, bbox_min_y, bbox_max_x, bbox_max_y;
+} Stroke;
+
 typedef struct _WindowInk
 {
   MetaWindow *window;
   cairo_surface_t *surface;
+  GPtrArray *strokes;           /* Stroke *, owned; free via stroke_free */
   int width, height;
   gulong pos_id, size_id, min_id, ws_id, unm_id;
   MetaAnnotationLayer *layer;
@@ -72,6 +103,7 @@ struct _MetaAnnotationLayer
   cairo_surface_t *surface;
   /* Stage-sized surface that catches strokes started over the desktop. */
   cairo_surface_t *unattached_surface;
+  GPtrArray *unattached_strokes;  /* Stroke *, owned; free via stroke_free */
   int stage_width, stage_height;
 
   /* MetaWindow* -> WindowInk*. Values owned; freed via hash table dtor. */
@@ -92,6 +124,14 @@ struct _MetaAnnotationLayer
   gboolean stroke_active;
   float last_pressure;          /* last known tablet pressure, [0, 1] */
   float last_tilt_factor;       /* width multiplier from tilt magnitude, >= 1 */
+  /* Pointer to the Stroke currently being appended to, NULL when in
+   * erase mode or between strokes. Always points at an element of the
+   * strokes GPtrArray on the current target buffer (per-window or
+   * unattached); kept valid by the fact that we never delete from that
+   * array while ink mode is active. Cleared wherever the underlying
+   * storage is thrown away (anchor change, window unmanage, clear,
+   * resize). */
+  Stroke *current_stroke;
 
   /* Bitmask of currently-held pen barrel buttons (tool events with a
    * non-primary clutter button, e.g. BTN_STYLUS -> 2, BTN_STYLUS2 -> 3,
@@ -262,6 +302,147 @@ surface_clear (cairo_surface_t *s)
   cairo_surface_flush (s);
 }
 
+/* --------------- Stroke / ink buffer --------------- */
+
+static float pressure_to_width_multiplier (float pressure);
+
+/* Maximum stroke half-width an InkPoint contributes. Matches the
+ * geometry used in draw_segment so bboxes never underestimate. */
+static float
+ink_point_max_half_width (const InkPoint *p)
+{
+  float mult = pressure_to_width_multiplier (p->pressure);
+  return 0.5f * ANNOT_BASE_WIDTH * mult * p->tilt_factor;
+}
+
+static Stroke *
+stroke_new (const float rgba[4])
+{
+  Stroke *s = g_new0 (Stroke, 1);
+  s->points = g_array_new (FALSE, FALSE, sizeof (InkPoint));
+  if (rgba)
+    {
+      s->rgba[0] = rgba[0]; s->rgba[1] = rgba[1];
+      s->rgba[2] = rgba[2]; s->rgba[3] = rgba[3];
+    }
+  s->bbox_min_x = s->bbox_min_y =  G_MAXFLOAT;
+  s->bbox_max_x = s->bbox_max_y = -G_MAXFLOAT;
+  return s;
+}
+
+static void
+stroke_free (gpointer data)
+{
+  Stroke *s = data;
+  if (!s)
+    return;
+  if (s->points)
+    g_array_free (s->points, TRUE);
+  g_free (s);
+}
+
+static void
+stroke_append_point (Stroke *s, const InkPoint *p)
+{
+  float r;
+
+  g_array_append_val (s->points, *p);
+
+  r = ink_point_max_half_width (p);
+  if (p->x - r < s->bbox_min_x) s->bbox_min_x = p->x - r;
+  if (p->y - r < s->bbox_min_y) s->bbox_min_y = p->y - r;
+  if (p->x + r > s->bbox_max_x) s->bbox_max_x = p->x + r;
+  if (p->y + r > s->bbox_max_y) s->bbox_max_y = p->y + r;
+}
+
+static GPtrArray *
+strokes_array_new (void)
+{
+  return g_ptr_array_new_with_free_func (stroke_free);
+}
+
+static void
+strokes_clear (GPtrArray *strokes)
+{
+  if (strokes)
+    g_ptr_array_set_size (strokes, 0);
+}
+
+/* Forward decl for rasterization helpers used by erase. */
+static void draw_segment_full (cairo_surface_t *target,
+                               const float      rgba[4],
+                               float x1, float y1, float x2, float y2,
+                               float p1, float p2,
+                               float tilt1, float tilt2,
+                               gboolean erase);
+
+/* Paint one stored Stroke into `target` using the stroke's color. */
+static void
+rasterize_stroke (cairo_surface_t *target, Stroke *s)
+{
+  guint n;
+  guint i;
+
+  if (!target || !s || !s->points)
+    return;
+
+  n = s->points->len;
+  if (n == 0)
+    return;
+
+  if (n == 1)
+    {
+      InkPoint *p = &g_array_index (s->points, InkPoint, 0);
+      draw_segment_full (target, s->rgba,
+                         p->x, p->y, p->x, p->y,
+                         p->pressure, p->pressure,
+                         p->tilt_factor, p->tilt_factor,
+                         FALSE);
+      return;
+    }
+
+  for (i = 1; i < n; i++)
+    {
+      InkPoint *a = &g_array_index (s->points, InkPoint, i - 1);
+      InkPoint *b = &g_array_index (s->points, InkPoint, i);
+      draw_segment_full (target, s->rgba,
+                         a->x, a->y, b->x, b->y,
+                         a->pressure, b->pressure,
+                         a->tilt_factor, b->tilt_factor,
+                         FALSE);
+    }
+}
+
+/* Clear target then paint every stroke in order. Used after erase
+ * deletes one or more strokes from the list. */
+static void
+rasterize_all_strokes (cairo_surface_t *target, GPtrArray *strokes)
+{
+  guint i;
+
+  if (!target)
+    return;
+
+  cairo_surface_flush (target);
+  {
+    cairo_t *cr = cairo_create (target);
+    cairo_set_operator (cr, CAIRO_OPERATOR_CLEAR);
+    cairo_paint (cr);
+    cairo_destroy (cr);
+  }
+
+  if (!strokes)
+    {
+      cairo_surface_flush (target);
+      return;
+    }
+
+  for (i = 0; i < strokes->len; i++)
+    rasterize_stroke (target, g_ptr_array_index (strokes, i));
+
+  cairo_surface_flush (target);
+}
+
 static void
 recreate_buffers (MetaAnnotationLayer *layer,
                   int                  width,
@@ -282,6 +463,14 @@ recreate_buffers (MetaAnnotationLayer *layer,
   layer->unattached_surface = cairo_surface_new_cleared (width, height);
   layer->stage_width = width;
   layer->stage_height = height;
+
+  /* Coordinates in unattached_strokes are in stage space and thus
+   * still valid across a resize. Re-rasterize into the fresh
+   * surface so no ink disappears after the output geometry
+   * changes. */
+  if (layer->unattached_strokes)
+    rasterize_all_strokes (layer->unattached_surface,
+                           layer->unattached_strokes);
 
   ctx = clutter_backend_get_cogl_context (
     meta_backend_get_clutter_backend (layer->backend));
@@ -313,6 +502,7 @@ on_stage_size_changed (ClutterActor         *stage,
 
   recreate_buffers (layer, width, height);
   layer->stroke_active = FALSE;
+  layer->current_stroke = NULL;
   set_stroke_anchor (layer, NULL);
 }
 
@@ -435,6 +625,7 @@ window_ink_free (gpointer data)
       ink->window = NULL;
     }
   g_clear_pointer (&ink->surface, cairo_surface_destroy);
+  g_clear_pointer (&ink->strokes, g_ptr_array_unref);
   g_free (ink);
 }
 
@@ -458,6 +649,7 @@ ensure_window_ink (MetaAnnotationLayer *layer, MetaWindow *win)
   ink->width = fr.width;
   ink->height = fr.height;
   ink->surface = cairo_surface_new_cleared (fr.width, fr.height);
+  ink->strokes = strokes_array_new ();
 
   ink->pos_id  = g_signal_connect (win, "position-changed",
                                    G_CALLBACK (on_window_position_changed), ink);
@@ -479,7 +671,6 @@ window_ink_resize_to_frame (WindowInk *ink)
 {
   MtkRectangle fr;
   cairo_surface_t *new_s;
-  cairo_t *cr;
 
   if (!ink || !ink->window)
     return;
@@ -494,20 +685,18 @@ window_ink_resize_to_frame (WindowInk *ink)
   new_s = cairo_surface_new_cleared (fr.width, fr.height);
 
   if (ink->surface)
-    {
-      /* Preserve existing ink at (0,0). Shrinks clip, grows show transparent. */
-      cr = cairo_create (new_s);
-      cairo_set_operator (cr, CAIRO_OPERATOR_SOURCE);
-      cairo_set_source_surface (cr, ink->surface, 0, 0);
-      cairo_paint (cr);
-      cairo_destroy (cr);
-      cairo_surface_destroy (ink->surface);
-    }
+    cairo_surface_destroy (ink->surface);
 
   ink->surface = new_s;
   ink->width = fr.width;
   ink->height = fr.height;
-  cairo_surface_flush (ink->surface);
+
+  /* Stored strokes are in window-local coordinates and remain valid
+   * across a resize. Re-rasterize into the fresh (and differently
+   * sized) surface instead of blitting pixels, so ink that now falls
+   * inside the new frame bounds is preserved and anything outside
+   * is clipped by cairo naturally. */
+  rasterize_all_strokes (ink->surface, ink->strokes);
 }
 
 static void
@@ -553,6 +742,10 @@ on_window_unmanaged (MetaWindow *win, gpointer data)
     {
       set_stroke_anchor (layer, NULL);
       layer->stroke_active = FALSE;
+      /* current_stroke pointed into this window's strokes array which
+       * is about to be freed with `ink`; drop the reference before it
+       * dangles. */
+      layer->current_stroke = NULL;
     }
 
   /* A tap gesture in flight that references this window is now
@@ -871,6 +1064,7 @@ meta_annotation_layer_new (MetaBackend *backend, MetaDisplay *display)
   layer->per_window =
     g_hash_table_new_full (g_direct_hash, g_direct_equal,
                            NULL, window_ink_free);
+  layer->unattached_strokes = strokes_array_new ();
 
   layer->actor = clutter_actor_new ();
   clutter_actor_set_name (layer->actor, "annotation-layer");
@@ -929,6 +1123,7 @@ meta_annotation_layer_destroy (MetaAnnotationLayer *layer)
   /* Drop weak reference before the window hash is torn down. */
   set_stroke_anchor (layer, NULL);
   layer->stroke_active = FALSE;
+  layer->current_stroke = NULL;
 
   if (layer->display)
     {
@@ -950,6 +1145,7 @@ meta_annotation_layer_destroy (MetaAnnotationLayer *layer)
 
   g_clear_pointer (&layer->surface, cairo_surface_destroy);
   g_clear_pointer (&layer->unattached_surface, cairo_surface_destroy);
+  g_clear_pointer (&layer->unattached_strokes, g_ptr_array_unref);
   g_clear_pointer (&layer->actor, clutter_actor_destroy);
   g_clear_pointer (&layer->chrome_regions, g_array_unref);
   g_clear_pointer (&layer->chrome_press_id, g_free);
@@ -977,6 +1173,7 @@ meta_annotation_layer_clear (MetaAnnotationLayer *layer)
   g_return_if_fail (layer != NULL);
 
   surface_clear (layer->unattached_surface);
+  strokes_clear (layer->unattached_strokes);
   if (layer->per_window)
     {
       g_hash_table_iter_init (&iter, layer->per_window);
@@ -984,8 +1181,13 @@ meta_annotation_layer_clear (MetaAnnotationLayer *layer)
         {
           WindowInk *ink = v;
           surface_clear (ink->surface);
+          strokes_clear (ink->strokes);
         }
     }
+  /* A clear that lands mid-stroke would leave current_stroke pointing
+   * at a Stroke we just wiped from the list. Drop it so the next
+   * continue_stroke creates a new one. */
+  layer->current_stroke = NULL;
   /* Clear the composite too, so a clear-while-paused leaves it
    * consistent with the per-window sources. recompose() early-returns
    * when paused without touching layer->surface, and any intermediate
@@ -1046,7 +1248,10 @@ meta_annotation_layer_set_active (MetaAnnotationLayer *layer,
   /* Drop any stuck barrel modifiers so toggling active always starts
    * in ink (not erase) mode. */
   if (!active)
-    layer->pen_barrel_buttons = 0;
+    {
+      layer->pen_barrel_buttons = 0;
+      layer->current_stroke = NULL;
+    }
   update_actor_visibility (layer);
 }
 
@@ -1075,6 +1280,7 @@ meta_annotation_layer_set_paused (MetaAnnotationLayer *layer,
   if (!was_paused && paused && layer->stroke_active)
     {
       layer->stroke_active = FALSE;
+      layer->current_stroke = NULL;
       set_stroke_anchor (layer, NULL);
     }
 
@@ -1114,18 +1320,22 @@ pressure_to_width_multiplier (float pressure)
   return sqrtf (pressure);
 }
 
+/* Paint (or erase) one stroke segment into `target`. Color is taken
+ * from the explicit rgba argument so rasterize_stroke can replay old
+ * strokes with their original color even after the dock's current
+ * color has changed. */
 static void
-draw_segment (MetaAnnotationLayer *layer,
-              cairo_surface_t     *target,
-              float                x1,
-              float                y1,
-              float                x2,
-              float                y2,
-              float                p1,
-              float                p2,
-              float                tilt1,
-              float                tilt2,
-              gboolean             erase)
+draw_segment_full (cairo_surface_t *target,
+                   const float      rgba[4],
+                   float            x1,
+                   float            y1,
+                   float            x2,
+                   float            y2,
+                   float            p1,
+                   float            p2,
+                   float            tilt1,
+                   float            tilt2,
+                   gboolean         erase)
 {
   cairo_t *cr;
   float dx = x2 - x1;
@@ -1141,22 +1351,17 @@ draw_segment (MetaAnnotationLayer *layer,
   cr = cairo_create (target);
   if (erase)
     {
-      /* CLEAR ignores the source color, but cairo still requires a
-       * source to be set; any opaque source picks out the shape alpha. */
       cairo_set_source_rgba (cr, 0.0, 0.0, 0.0, 1.0);
       cairo_set_operator (cr, CAIRO_OPERATOR_CLEAR);
     }
   else
     {
-      cairo_set_source_rgba (cr,
-                             layer->rgba[0], layer->rgba[1],
-                             layer->rgba[2], layer->rgba[3]);
+      cairo_set_source_rgba (cr, rgba[0], rgba[1], rgba[2], rgba[3]);
       cairo_set_operator (cr, CAIRO_OPERATOR_OVER);
     }
 
   if (len2 < 0.25f)
     {
-      /* Tap / click without movement. */
       cairo_arc (cr, x1, y1, w1 * 0.5f, 0.0f, (float) (2.0 * M_PI));
       cairo_fill (cr);
     }
@@ -1170,7 +1375,6 @@ draw_segment (MetaAnnotationLayer *layer,
       float hx2 = nx * w2 * 0.5f;
       float hy2 = ny * w2 * 0.5f;
 
-      /* Filled trapezoid forms the stroke body. */
       cairo_new_path (cr);
       cairo_move_to (cr, x1 + hx1, y1 + hy1);
       cairo_line_to (cr, x2 + hx2, y2 + hy2);
@@ -1179,7 +1383,6 @@ draw_segment (MetaAnnotationLayer *layer,
       cairo_close_path (cr);
       cairo_fill (cr);
 
-      /* Circular caps so consecutive segments join smoothly. */
       cairo_arc (cr, x1, y1, w1 * 0.5f, 0.0f, (float) (2.0 * M_PI));
       cairo_fill (cr);
       cairo_arc (cr, x2, y2, w2 * 0.5f, 0.0f, (float) (2.0 * M_PI));
@@ -1310,16 +1513,24 @@ event_get_tilt_factor (const ClutterEvent *event, float *out)
   return TRUE;
 }
 
-static cairo_surface_t *
-stroke_target_surface (MetaAnnotationLayer *layer)
+/* Both the surface and strokes list for the current anchor. NULL anchor
+ * means "unattached"; NULL WindowInk (anchor no longer in per_window)
+ * yields (NULL, NULL), which upstream callers must tolerate. */
+static void
+stroke_target (MetaAnnotationLayer  *layer,
+               cairo_surface_t     **out_surface,
+               GPtrArray           **out_strokes)
 {
   if (layer->stroke_anchor)
     {
       WindowInk *ink = g_hash_table_lookup (layer->per_window,
                                             layer->stroke_anchor);
-      return ink ? ink->surface : NULL;
+      *out_surface = ink ? ink->surface : NULL;
+      *out_strokes = ink ? ink->strokes : NULL;
+      return;
     }
-  return layer->unattached_surface;
+  *out_surface = layer->unattached_surface;
+  *out_strokes = layer->unattached_strokes;
 }
 
 static void
@@ -1344,15 +1555,175 @@ convert_stage_to_local (MetaAnnotationLayer *layer,
     }
 }
 
+/* --------------- Erase hit-testing --------------- */
+
+static float
+point_to_segment_dist_sq (float px, float py,
+                          float ax, float ay, float bx, float by)
+{
+  float dx = bx - ax;
+  float dy = by - ay;
+  float len2 = dx * dx + dy * dy;
+  float t, qx, qy, ex, ey;
+
+  if (len2 < 1e-6f)
+    {
+      float ddx = px - ax, ddy = py - ay;
+      return ddx * ddx + ddy * ddy;
+    }
+  t = ((px - ax) * dx + (py - ay) * dy) / len2;
+  if (t < 0.0f) t = 0.0f;
+  else if (t > 1.0f) t = 1.0f;
+  qx = ax + t * dx;
+  qy = ay + t * dy;
+  ex = px - qx; ey = py - qy;
+  return ex * ex + ey * ey;
+}
+
+/* Shortest distance between two 2D segments. Combines a proper
+ * intersection test (distance 0 if they cross) with the four
+ * point-to-segment checks that cover non-crossing cases. */
+static float
+segment_to_segment_dist (float ax, float ay, float bx, float by,
+                         float cx, float cy, float dx, float dy)
+{
+  float d1, d2, d3, d4;
+  /* Intersection: two segments cross iff the endpoints of each
+   * straddle the other segment's supporting line. */
+  float r1 = (dx - cx) * (ay - cy) - (dy - cy) * (ax - cx);
+  float r2 = (dx - cx) * (by - cy) - (dy - cy) * (bx - cx);
+  float r3 = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
+  float r4 = (bx - ax) * (dy - ay) - (by - ay) * (dx - ax);
+
+  if (((r1 > 0 && r2 < 0) || (r1 < 0 && r2 > 0)) &&
+      ((r3 > 0 && r4 < 0) || (r3 < 0 && r4 > 0)))
+    return 0.0f;
+
+  d1 = point_to_segment_dist_sq (ax, ay, cx, cy, dx, dy);
+  d2 = point_to_segment_dist_sq (bx, by, cx, cy, dx, dy);
+  d3 = point_to_segment_dist_sq (cx, cy, ax, ay, bx, by);
+  d4 = point_to_segment_dist_sq (dx, dy, ax, ay, bx, by);
+
+  if (d2 < d1) d1 = d2;
+  if (d3 < d1) d1 = d3;
+  if (d4 < d1) d1 = d4;
+  return sqrtf (d1);
+}
+
+/* Returns TRUE if the eraser segment (a->b, radius r) intersects any
+ * segment of the stored polyline `s`, or (for a single-point stroke)
+ * comes within r of its lone point. `r` already includes the stroke's
+ * own half-width contribution. */
+static gboolean
+stroke_hit_by_eraser (Stroke *s,
+                      float   ax, float ay,
+                      float   bx, float by,
+                      float   r)
+{
+  guint n, i;
+
+  if (!s || !s->points)
+    return FALSE;
+  n = s->points->len;
+  if (n == 0)
+    return FALSE;
+
+  /* Broad phase: does the eraser segment's bbox (expanded by r)
+   * overlap the stroke's cached bbox? */
+  {
+    float ex_min = (ax < bx ? ax : bx) - r;
+    float ex_max = (ax > bx ? ax : bx) + r;
+    float ey_min = (ay < by ? ay : by) - r;
+    float ey_max = (ay > by ? ay : by) + r;
+    if (ex_max < s->bbox_min_x || ex_min > s->bbox_max_x ||
+        ey_max < s->bbox_min_y || ey_min > s->bbox_max_y)
+      return FALSE;
+  }
+
+  if (n == 1)
+    {
+      InkPoint *p = &g_array_index (s->points, InkPoint, 0);
+      float d2 = point_to_segment_dist_sq (p->x, p->y, ax, ay, bx, by);
+      return d2 <= r * r;
+    }
+
+  for (i = 1; i < n; i++)
+    {
+      InkPoint *p0 = &g_array_index (s->points, InkPoint, i - 1);
+      InkPoint *p1 = &g_array_index (s->points, InkPoint, i);
+      if (segment_to_segment_dist (ax, ay, bx, by,
+                                   p0->x, p0->y, p1->x, p1->y) <= r)
+        return TRUE;
+    }
+  return FALSE;
+}
+
+/* Walk strokes back-to-front, removing any hit by the eraser segment.
+ * Reverse order because g_ptr_array_remove_index (not _fast) keeps the
+ * stacking order intact so re-rasterization is identical for the
+ * survivors. Returns the count removed. */
+static guint
+erase_strokes_hit_by_segment (GPtrArray *strokes,
+                              float ax, float ay,
+                              float bx, float by,
+                              float eraser_radius)
+{
+  guint removed = 0;
+  guint i;
+
+  if (!strokes)
+    return 0;
+
+  for (i = strokes->len; i-- > 0;)
+    {
+      Stroke *s = g_ptr_array_index (strokes, i);
+      if (stroke_hit_by_eraser (s, ax, ay, bx, by, eraser_radius))
+        {
+          g_ptr_array_remove_index (strokes, i);
+          removed++;
+        }
+    }
+  return removed;
+}
+
+/* --------------- Stroke begin / continue / end --------------- */
+
+/* Append a point to the currently-in-flight ink stroke, creating a
+ * fresh Stroke in the target buffer's list if there isn't one. Used
+ * both by begin_stroke (to seed the first point) and continue_stroke
+ * (to seed on ink-after-erase mode flips). */
+static void
+append_ink_point (MetaAnnotationLayer *layer,
+                  GPtrArray           *strokes,
+                  const InkPoint      *pt)
+{
+  if (!strokes || !pt)
+    return;
+
+  if (!layer->current_stroke)
+    {
+      Stroke *s = stroke_new (layer->rgba);
+      g_ptr_array_add (strokes, s);
+      layer->current_stroke = s;
+    }
+  stroke_append_point (layer->current_stroke, pt);
+}
+
 static void
 begin_stroke (MetaAnnotationLayer *layer, float stage_x, float stage_y,
               gboolean pressure_known, float pressure,
-              gboolean tilt_known, float tilt_factor)
+              gboolean tilt_known, float tilt_factor,
+              gboolean erase)
 {
   MetaWindow *anchor;
+  cairo_surface_t *target;
+  GPtrArray *strokes;
 
   anchor = pick_anchor_window (layer, stage_x, stage_y);
   set_stroke_anchor (layer, anchor);
+  /* Defensive: this Stroke pointer, if any, belonged to the previous
+   * anchor's list and is meaningless now. */
+  layer->current_stroke = NULL;
 
   if (anchor)
     ensure_window_ink (layer, anchor);
@@ -1361,17 +1732,29 @@ begin_stroke (MetaAnnotationLayer *layer, float stage_x, float stage_y,
                           &layer->stroke_last_x, &layer->stroke_last_y);
   layer->stroke_active = TRUE;
   /* Reset on unknown pressure so mouse / non-pressure touch after a
-   * low-pressure stylus session renders at full width. Without this
-   * reset, last_pressure leaks the final pressure of the previous
-   * tablet stroke into subsequent mouse / touch strokes.
-   *
-   * Also treat pressure==0 (e.g. a pen-button press while hovering) as
-   * unknown; rendering such an event at MIN_PRESSURE would produce a
-   * ~1.9px stroke that the user didn't ask for. The motion handler
-   * already gates on `pressure > 0` for the same reason. */
+   * low-pressure stylus session renders at full width. */
   layer->last_pressure =
     (pressure_known && pressure > 0.0f) ? pressure : 1.0f;
   layer->last_tilt_factor = tilt_known ? tilt_factor : 1.0f;
+
+  if (erase)
+    return;
+
+  stroke_target (layer, &target, &strokes);
+  if (!strokes)
+    return;
+
+  /* Seed a new ink Stroke with the initial point so a single press
+   * without any motion still renders as a dot after future
+   * re-rasterizations. */
+  {
+    InkPoint p = {
+      .x = layer->stroke_last_x, .y = layer->stroke_last_y,
+      .pressure = layer->last_pressure,
+      .tilt_factor = layer->last_tilt_factor,
+    };
+    append_ink_point (layer, strokes, &p);
+  }
 }
 
 static void
@@ -1381,21 +1764,77 @@ continue_stroke (MetaAnnotationLayer *layer, float stage_x, float stage_y,
                  gboolean erase)
 {
   cairo_surface_t *target;
+  GPtrArray *strokes;
   float lx, ly;
   float p_end;
   float t_end;
 
-  target = stroke_target_surface (layer);
+  stroke_target (layer, &target, &strokes);
   convert_stage_to_local (layer, stage_x, stage_y, &lx, &ly);
   p_end = pressure_known ? pressure : layer->last_pressure;
   t_end = tilt_known ? tilt_factor : layer->last_tilt_factor;
 
-  if (target)
-    draw_segment (layer, target,
-                  layer->stroke_last_x, layer->stroke_last_y, lx, ly,
-                  layer->last_pressure, p_end,
-                  layer->last_tilt_factor, t_end,
-                  erase);
+  if (erase)
+    {
+      /* Mode flipped from ink to erase mid-stroke: seal off the
+       * in-flight stroke now so the next ink segment (if any) opens a
+       * fresh Stroke. */
+      layer->current_stroke = NULL;
+
+      if (target && strokes)
+        {
+          /* Eraser radius = half of the visible eraser width at the
+           * far endpoint of this sub-segment, plus a floor so very
+           * light touches still catch strokes. */
+          float w = ANNOT_BASE_WIDTH *
+                    pressure_to_width_multiplier (p_end) *
+                    t_end * ANNOT_ERASE_WIDTH_FACTOR;
+          float r = 0.5f * w;
+          if (r < ANNOT_ERASE_MIN_RADIUS)
+            r = ANNOT_ERASE_MIN_RADIUS;
+
+          if (erase_strokes_hit_by_segment (strokes,
+                                            layer->stroke_last_x,
+                                            layer->stroke_last_y,
+                                            lx, ly, r) > 0)
+            {
+              rasterize_all_strokes (target, strokes);
+            }
+        }
+    }
+  else if (target && strokes)
+    {
+      /* Draw the segment into the surface for live feedback, then
+       * record the endpoint so a later erase-and-re-rasterize pass
+       * reproduces the stroke exactly. */
+      draw_segment_full (target, layer->rgba,
+                         layer->stroke_last_x, layer->stroke_last_y,
+                         lx, ly,
+                         layer->last_pressure, p_end,
+                         layer->last_tilt_factor, t_end,
+                         FALSE);
+
+      /* If current_stroke is NULL here, we're just resuming ink after
+       * an erase sub-segment; seed with the previous endpoint so the
+       * new Stroke has both ends of this segment. */
+      if (!layer->current_stroke)
+        {
+          InkPoint p_prev = {
+            .x = layer->stroke_last_x, .y = layer->stroke_last_y,
+            .pressure = layer->last_pressure,
+            .tilt_factor = layer->last_tilt_factor,
+          };
+          append_ink_point (layer, strokes, &p_prev);
+        }
+      {
+        InkPoint p_new = {
+          .x = lx, .y = ly,
+          .pressure = p_end,
+          .tilt_factor = t_end,
+        };
+        append_ink_point (layer, strokes, &p_new);
+      }
+    }
 
   layer->stroke_last_x = lx;
   layer->stroke_last_y = ly;
@@ -1408,6 +1847,7 @@ static void
 end_stroke (MetaAnnotationLayer *layer)
 {
   layer->stroke_active = FALSE;
+  layer->current_stroke = NULL;
   set_stroke_anchor (layer, NULL);
   schedule_recompose (layer);
 }
@@ -1422,12 +1862,16 @@ clear_ink_for_anchor (MetaAnnotationLayer *layer, MetaWindow *anchor)
   if (!anchor)
     {
       surface_clear (layer->unattached_surface);
+      strokes_clear (layer->unattached_strokes);
     }
   else
     {
       WindowInk *ink = g_hash_table_lookup (layer->per_window, anchor);
       if (ink)
-        surface_clear (ink->surface);
+        {
+          surface_clear (ink->surface);
+          strokes_clear (ink->strokes);
+        }
     }
 
   /* An in-flight stroke into the just-cleared target would redraw
@@ -1435,6 +1879,7 @@ clear_ink_for_anchor (MetaAnnotationLayer *layer, MetaWindow *anchor)
   if (layer->stroke_anchor == anchor)
     {
       layer->stroke_active = FALSE;
+      layer->current_stroke = NULL;
       set_stroke_anchor (layer, NULL);
     }
 
@@ -1622,7 +2067,8 @@ meta_annotation_layer_handle_event (MetaAnnotationLayer *layer,
       clutter_event_get_coords (event, &pos.x, &pos.y);
       begin_stroke (layer, pos.x, pos.y,
                     pressure_known, pressure,
-                    tilt_known, tilt_factor);
+                    tilt_known, tilt_factor,
+                    erase_is_active (layer, event));
       note_tap_press (layer, pos.x, pos.y, layer->stroke_anchor);
       return TRUE;
 
@@ -1641,7 +2087,8 @@ meta_annotation_layer_handle_event (MetaAnnotationLayer *layer,
           {
             begin_stroke (layer, pos.x, pos.y,
                           pressure_known, pressure,
-                          tilt_known, tilt_factor);
+                          tilt_known, tilt_factor,
+                          erase);
             /* A stroke that begins on motion never saw a clean press,
              * so it can't be a tap; make sure stale pending state
              * doesn't accidentally count this as one on release. */
@@ -1687,7 +2134,8 @@ meta_annotation_layer_handle_event (MetaAnnotationLayer *layer,
       clutter_event_get_coords (event, &pos.x, &pos.y);
       begin_stroke (layer, pos.x, pos.y,
                     pressure_known, pressure,
-                    tilt_known, tilt_factor);
+                    tilt_known, tilt_factor,
+                    erase_is_active (layer, event));
       note_tap_press (layer, pos.x, pos.y, layer->stroke_anchor);
       return TRUE;
 
