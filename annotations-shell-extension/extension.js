@@ -69,6 +69,7 @@ function colorRegionId(i) {
     return `color-${i}`;
 }
 const CLEAR_REGION_ID = 'clear';
+const UNDO_REGION_ID = 'undo';
 /* Reserved id for the dock's bounding rect. Sent to Mutter so that:
  *   - ink is erased under the whole dock (including separator / padding
  *     and any gaps between buttons), and
@@ -191,6 +192,13 @@ export default class AnnotationExtension extends Extension {
             });
             return;
         }
+        if (id === UNDO_REGION_ID) {
+            dbusCall('UndoLast', null, err => {
+                if (err)
+                    console.warn(`Annotation UndoLast: ${err.message}`);
+            });
+            return;
+        }
         if (id.startsWith('color-')) {
             const i = parseInt(id.slice('color-'.length), 10);
             const c = COLORS[i];
@@ -201,6 +209,26 @@ export default class AnnotationExtension extends Extension {
                 if (err)
                     console.warn(`Annotation SetColor: ${err.message}`);
             });
+            this._setActiveColor(i);
+        }
+    }
+
+    /* Mark one color button as the selected one and clear every other.
+     * Called both for mouse clicks (St.Button "clicked" -> _activateRegion)
+     * and for pen synthetic activation (RegionActivated D-Bus signal
+     * -> _activateRegion), so the indicator tracks both paths. */
+    _setActiveColor(index) {
+        this._activeColorIndex = index;
+        for (const entry of this._regionButtons) {
+            if (!entry || !entry.actor)
+                continue;
+            if (!entry.id || !entry.id.startsWith('color-'))
+                continue;
+            const i = parseInt(entry.id.slice('color-'.length), 10);
+            if (i === index)
+                entry.actor.add_style_pseudo_class('checked');
+            else
+                entry.actor.remove_style_pseudo_class('checked');
         }
     }
 
@@ -246,6 +274,17 @@ export default class AnnotationExtension extends Extension {
             style_class: 'annotation-dock-separator',
         });
 
+        const undo = new St.Button({
+            style_class: 'annotation-action-button',
+            can_focus: true,
+            accessible_name: 'Undo last annotation',
+            child: new St.Icon({
+                icon_name: 'edit-undo-symbolic',
+                style_class: 'system-status-icon',
+            }),
+        });
+        undo.connect('clicked', () => this._activateRegion(UNDO_REGION_ID));
+
         const trash = new St.Button({
             style_class: 'annotation-trash-button',
             can_focus: true,
@@ -257,8 +296,14 @@ export default class AnnotationExtension extends Extension {
         });
         trash.connect('clicked', () => this._activateRegion(CLEAR_REGION_ID));
         this._dock.add_child(separator);
+        this._dock.add_child(undo);
         this._dock.add_child(trash);
+        this._regionButtons.push({id: UNDO_REGION_ID, actor: undo});
         this._regionButtons.push({id: CLEAR_REGION_ID, actor: trash});
+
+        /* Mutter's initial color matches COLORS[0]; show that on the dock
+         * so the user sees which color is armed without having to tap. */
+        this._setActiveColor(0);
 
         Main.uiGroup.add_child(this._dock);
         /* raise_top() is not always exposed on St actors in GJS; Shell uses this pattern. */
