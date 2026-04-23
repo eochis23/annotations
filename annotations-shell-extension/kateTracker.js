@@ -37,6 +37,17 @@ const BUS = 'org.gnome.Mutter.Annotation';
 const PATH = '/org/gnome/Mutter/Annotation';
 const IFACE = 'org.gnome.Mutter.Annotation';
 
+// #region agent log
+function _agentDbg(loc, msg, data) {
+    try {
+        console.warn('AGENT_DBG_KATE ' + JSON.stringify({
+            sessionId: 'da8410', runId: 'kate-scroll', location: loc,
+            message: msg, data: data ?? {}, timestamp: Date.now(),
+        }));
+    } catch (e) { /* never let logging crash the shell */ }
+}
+// #endregion
+
 /* wm_class values Kate actually ships with, normalized to lowercase.
  * Wayland: 'org.kde.kate'. X11: 'kate'. Flatpak / packaging variants
  * occasionally show up with an 'org.kde.Kate' form so we case-fold. */
@@ -200,6 +211,27 @@ class KateWindowTracker {
         if (found.scrollbar)
             this.scrollbar = found.scrollbar;
 
+        // #region agent log
+        const edExt = this.editor
+            ? safeExtents(this.editor, Atspi.CoordType.WINDOW)
+            : null;
+        const sbExt = this.scrollbar
+            ? safeExtents(this.scrollbar, Atspi.CoordType.WINDOW)
+            : null;
+        _agentDbg('KateWindowTracker._tryDiscover', 'discovery result', {
+            hypothesisId: 'H3',
+            pid: this.pid,
+            wmClass: this.wmClass,
+            appFound: !!app,
+            editorFound: !!this.editor,
+            scrollbarFound: !!this.scrollbar,
+            editorArea: found.editorArea,
+            editorExt: edExt ? {x: edExt.x, y: edExt.y, w: edExt.width, h: edExt.height} : null,
+            scrollbarExt: sbExt ? {x: sbExt.x, y: sbExt.y, w: sbExt.width, h: sbExt.height} : null,
+            retry: this._retryCount,
+        });
+        // #endregion
+
         if (this.editor) {
             this._captureBaseline();
             this._republishRegion();
@@ -309,6 +341,13 @@ class KateWindowTracker {
         if (sig === this.lastRegionSig) return;
         this.lastRegionSig = sig;
 
+        // #region agent log
+        _agentDbg('KateWindowTracker._republishRegion', 'SetWindowEditorRegion', {
+            hypothesisId: 'H4',
+            pid: this.pid, x, y, w, h,
+        });
+        // #endregion
+
         dbusCall('SetWindowEditorRegion',
             new GLib.Variant('(uiiii)', [this.pid, x, y, w, h]));
     }
@@ -362,6 +401,16 @@ class KateWindowTracker {
         const syRound = Math.round(sy);
         if (this.lastScrollY === syRound) return;
         this.lastScrollY = syRound;
+
+        // #region agent log
+        _agentDbg('KateWindowTracker._republishScroll', 'SetWindowScroll', {
+            hypothesisId: 'H4',
+            pid: this.pid,
+            scrollY: syRound,
+            usedText: this.charBaseYRel !== null,
+            charBaseYRel: this.charBaseYRel,
+        });
+        // #endregion
 
         dbusCall('SetWindowScroll',
             new GLib.Variant('(uii)', [this.pid, 0, syRound]));
@@ -450,16 +499,26 @@ export class KateTrackerManager {
     enable() {
         if (this._initialized) return;
 
+        // #region agent log
+        _agentDbg('KateTrackerManager.enable', 'entry', {});
+        // #endregion
+
         try {
             /* Atspi.init() is idempotent and returns 0 on success;
              * any throw here leaves us with _initialized=false and
              * subsequent enable() calls retry. */
             const rc = Atspi.init();
+            // #region agent log
+            _agentDbg('KateTrackerManager.enable', 'Atspi.init rc', {hypothesisId: 'H1', rc});
+            // #endregion
             if (rc !== 0 && rc !== 1) {
                 console.warn(`KateTrackerManager: Atspi.init rc=${rc}`);
                 return;
             }
         } catch (e) {
+            // #region agent log
+            _agentDbg('KateTrackerManager.enable', 'Atspi.init threw', {hypothesisId: 'H1', err: String(e?.message ?? e)});
+            // #endregion
             console.warn(`KateTrackerManager: Atspi.init failed: ${e.message}`);
             return;
         }
@@ -538,7 +597,22 @@ export class KateTrackerManager {
     _isKate(win) {
         if (!win) return false;
         const cls = win.get_wm_class();
-        return !!cls && KATE_WM_CLASSES.has(cls.toLowerCase());
+        const match = !!cls && KATE_WM_CLASSES.has(cls.toLowerCase());
+        // #region agent log
+        /* Logs every window the manager inspects -- intentionally noisy
+         * so H2 (wm_class mismatch) is unambiguous from one boot. */
+        _agentDbg('KateTrackerManager._isKate', 'wm_class check', {
+            hypothesisId: 'H2',
+            wmClass: cls ?? null,
+            wmClassInstance: (typeof win.get_wm_class_instance === 'function')
+                ? (win.get_wm_class_instance() ?? null) : undefined,
+            gtkAppId: (typeof win.get_gtk_application_id === 'function')
+                ? (win.get_gtk_application_id() ?? null) : undefined,
+            pid: (typeof win.get_pid === 'function') ? win.get_pid() : null,
+            match,
+        });
+        // #endregion
+        return match;
     }
 
     _trackIfNew(win) {
