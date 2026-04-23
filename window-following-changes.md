@@ -24,7 +24,12 @@ hidden while the overview is showing.
 ### `mutter/src/compositor/meta-annotation-layer.c`
 
 Essentially rewritten. The single cairo surface became a small composite
-model:
+model. After compositing window + unattached ink each frame, `recompose`
+clears every currently-published chrome region rectangle from the
+uploaded surface with `CAIRO_OPERATOR_CLEAR`, so ink can never appear
+on top of the annotation dock (buttons, separator, padding, or the
+dock-body region). `set_chrome_regions` / `clear_chrome_regions` now
+schedule a recompose so the dock mask tracks the dock's geometry.
 
 - `surface` - stage-sized composite surface. Rebuilt by `recompose()`;
   uploaded into the actor's `CoglTexture` by the existing
@@ -128,6 +133,55 @@ Mouse button strokes and non-pressure touch fall back to a cached
   not store a stroke-point history. Future persistence features would
   have to add one.
 
+#### Tilt-widened ink
+
+In addition to pressure, `draw_segment` now takes a per-endpoint tilt
+factor `>= 1` that scales the half-width. Tilt is read from
+`CLUTTER_INPUT_AXIS_XTILT` / `CLUTTER_INPUT_AXIS_YTILT` (both in
+degrees, libinput's native units), only for real tablet tools
+(`clutter_event_get_device_tool` non-NULL). Magnitude is normalised by
+`ANNOT_TILT_DEG_FULL = 60` and clamped to `[0, 1]`; the factor is
+`1 + ANNOT_TILT_WIDTH_BOOST * magnitude` with `ANNOT_TILT_WIDTH_BOOST =
+1.5`, i.e. a vertical pen is unchanged and a fully tilted pen is up to
+2.5x wider. The factor multiplies into the existing pressure-based
+width, is cached between events as `last_tilt_factor`, and renders
+through the existing trapezoid + circular-cap geometry - no directional
+nib; the effect is an isotropic widening reminiscent of pressing the
+side of a marker onto the paper.
+
+#### Tap-to-clear gestures
+
+Per the non-mouse-only routing on this layer, every press/release pair
+is a tap candidate. A tap is recorded when:
+
+- `press -> release` duration `<= TAP_MAX_DURATION_US = 300 ms`, and
+- stage-space distance between press and release points is
+  `<= TAP_MAX_MOVE_PX = 10` logical px.
+
+Exceeding either threshold (including drift detected during MOTION /
+TOUCH_UPDATE) cancels the pending tap so a stroke never counts as one.
+
+Each recorded tap carries a timestamp plus its anchor window (or NULL
+for the unattached / desktop surface) and is appended to a rolling
+4-slot history. After each append we prune entries older than 750 ms
+and then check, in order:
+
+1. **Quad tap** - 4 taps within 750 ms (anywhere) -> call
+   `meta_annotation_layer_clear`, reset history.
+2. **Triple tap** - last 3 taps share an anchor and span
+   `<= TRIPLE_TAP_WINDOW_US = 500 ms` -> clear only that anchor's ink
+   (`clear_ink_for_anchor`, which clears the matching per-window surface
+   or the unattached surface), reset history.
+
+Because the 3-tap gesture fires as soon as its threshold is met, doing
+4 fast taps on the same window will hit the 3-tap clear on the third
+tap; the 4th tap then starts a new burst. 4 fast taps spread across
+more than one window or the desktop still hit the 4-tap clear-all.
+
+A dying anchor window clears any matching entries out of the pending
+tap and rolling history in `on_window_unmanaged`, so the gesture
+machinery never holds a dangling `MetaWindow*`.
+
 ### `mutter/src/core/meta-annotation-dbus.c`
 
 Added a `SetPaused(b)` method to the `org.gnome.Mutter.Annotation` D-Bus
@@ -148,15 +202,26 @@ RegionActivated routing.
   dock re-show and chrome republish.
 - If the overview is already visible at `enable()` time, we fire
   `SetPaused(true)` immediately.
+- `_publishChromeRegions` now prepends a single `__dock-body` region
+  covering the whole dock's transformed bounds before the per-button
+  regions. Because Mutter's chrome picker walks the region list in
+  reverse, per-button regions still win hit tests; the dock-body
+  region only catches presses that fell in the separator or padding.
+  `_activateRegion` already ignores unknown ids, so the resulting
+  `RegionActivated` signal for `__dock-body` is a deliberate no-op.
 
 ## Behavior summary
 
 - Drawing a stroke over window W attaches the stroke to W. Moving,
   resizing, or restacking W causes the ink to move, resize-clip, or be
   reoccluded on the very next idle tick.
-- Strokes over the desktop (or over the dock, since the dock is an
-  override-redirect overlay) land on `unattached_surface` and stay stage-
-  anchored.
+- Strokes over the desktop land on `unattached_surface` and stay
+  stage-anchored.
+- Strokes never appear on top of the annotation dock. Chrome regions
+  (buttons + dock body) consume presses before the stroke path sees
+  them, and at composite time the dock's rectangles are cleared out of
+  the uploaded surface, so ink that belongs to a window occluded by
+  the dock never bleeds onto it.
 - Minimizing or switching away from W hides its ink; restoring it brings
   the ink back untouched.
 - Closing W destroys the `WindowInk` and its strokes. There is no
@@ -165,6 +230,11 @@ RegionActivated routing.
   shows it again with all ink intact.
 - Pen pressure modulates line width with a square-root response curve;
   mouse and non-pressure-touch strokes are full width.
+- Pen tilt additionally widens the stroke (up to 2.5x at ~60 degrees
+  from vertical); direction is not used.
+- Three quick pen/touch taps on the same window within 500 ms clear
+  just that window's ink; four quick taps within 750 ms (any
+  combination of windows or the desktop) clear every window's ink.
 
 ## Known limitations / out of scope
 
@@ -177,7 +247,8 @@ RegionActivated routing.
 - No overview preview painting. Overview thumbnails do not render ink.
 - One stroke in flight globally; multi-seat concurrent strokes are not
   modeled.
-- No tilt / rotation / barrel-pressure; only `CLUTTER_INPUT_AXIS_PRESSURE`
+- No rotation / barrel-pressure and no directional tilt nib; only
+  `CLUTTER_INPUT_AXIS_PRESSURE` and tilt magnitude (via XTILT/YTILT)
   is consumed.
 - Per-device pressure calibration is a fixed `[0.1, 1.0]` clamp with a
   hard-coded `sqrt` gamma and `BASE_WIDTH = 6.0` logical px.
