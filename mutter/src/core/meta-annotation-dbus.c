@@ -69,6 +69,14 @@ handle_method_call (GDBusConnection       *connection,
       meta_annotation_layer_clear_chrome_regions (dbus->layer);
       g_dbus_method_invocation_return_value (invocation, NULL);
     }
+  else if (g_strcmp0 (method_name, "SetPaused") == 0)
+    {
+      gboolean paused;
+
+      g_variant_get (parameters, "(b)", &paused);
+      meta_annotation_layer_set_paused (dbus->layer, paused);
+      g_dbus_method_invocation_return_value (invocation, NULL);
+    }
   else
     {
       g_dbus_method_invocation_return_error (invocation,
@@ -95,6 +103,9 @@ static const gchar introspection_xml[] =
   "      <arg type='a(siiii)' name='regions' direction='in'/>"
   "    </method>"
   "    <method name='ClearChromeRegions'/>"
+  "    <method name='SetPaused'>"
+  "      <arg type='b' name='paused' direction='in'/>"
+  "    </method>"
   "    <signal name='RegionActivated'>"
   "      <arg type='s' name='id'/>"
   "      <arg type='s' name='kind'/>"

@@ -128,6 +128,46 @@ export default class AnnotationExtension extends Extension {
         });
     }
 
+    _setPaused(paused) {
+        /* A dropped SetPaused leaves Mutter with the wrong visibility bit
+         * (either paints over overview thumbnails, or stays hidden after
+         * the overview closes). One retry covers the common race where
+         * the bus name isn't owned yet.
+         *
+         * Every new call supersedes any previous intent: cancel the
+         * pending retry, and bump an epoch so an in-flight dbusCall reply
+         * for an older value can't schedule a retry that contradicts the
+         * current target. Without this guard, a late-failing SetPaused(true)
+         * could fire 300ms after a successful SetPaused(false) and leave
+         * the actor hidden. */
+        this._setPausedRetryId = removeSource(this._setPausedRetryId);
+        this._setPausedEpoch = (this._setPausedEpoch ?? 0) + 1;
+        const epoch = this._setPausedEpoch;
+
+        const variant = new GLib.Variant('(b)', [paused]);
+        dbusCall('SetPaused', variant, err => {
+            if (!err)
+                return;
+            if (!this._dock)
+                return;
+            if (epoch !== this._setPausedEpoch)
+                return;
+            this._setPausedRetryId = removeSource(this._setPausedRetryId);
+            this._setPausedRetryId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 300, () => {
+                this._setPausedRetryId = 0;
+                if (!this._dock)
+                    return GLib.SOURCE_REMOVE;
+                if (epoch !== this._setPausedEpoch)
+                    return GLib.SOURCE_REMOVE;
+                dbusCall('SetPaused', new GLib.Variant('(b)', [paused]), err2 => {
+                    if (err2)
+                        console.warn(`Annotation SetPaused(${paused}): ${err2.message}`);
+                });
+                return GLib.SOURCE_REMOVE;
+            });
+        });
+    }
+
     _activateRegion(id) {
         if (id === CLEAR_REGION_ID) {
             dbusCall('Clear', null, err => {
@@ -162,6 +202,8 @@ export default class AnnotationExtension extends Extension {
         this._allocDebounceId = 0;
         this._overviewShowingId = 0;
         this._overviewHiddenId = 0;
+        this._setPausedRetryId = 0;
+        this._setPausedEpoch = 0;
         this._regionActivatedId = 0;
         this._regionsPublished = false;
         this._regionButtons = [];
@@ -209,6 +251,12 @@ export default class AnnotationExtension extends Extension {
 
         if (Main.overview.visible)
             this._dock.hide();
+
+        /* Mutter's paused bit is process-lifetime, so always resync it on
+         * enable to clear any stale state left over from a previous
+         * enable/disable cycle. SetPaused is safe to fire before
+         * SetActive succeeds; Mutter just records the bit. */
+        this._setPaused(Main.overview.visible);
 
         this._publishChromeRegions = () => {
             if (!this._dock || !this._regionButtons.length)
@@ -283,6 +331,7 @@ export default class AnnotationExtension extends Extension {
                 return;
             this._dock.hide();
             this._clearChromeRegions();
+            this._setPaused(true);
         });
         this._overviewHiddenId = Main.overview.connect('hidden', () => {
             if (!this._dock)
@@ -290,6 +339,7 @@ export default class AnnotationExtension extends Extension {
             this._dock.show();
             Main.uiGroup.set_child_above_sibling(this._dock, null);
             this._positionDock();
+            this._setPaused(false);
         });
 
         this._regionActivatedId = Gio.DBus.session.signal_subscribe(
@@ -360,6 +410,13 @@ export default class AnnotationExtension extends Extension {
          * gone, so always send a fire-and-forget clear before SetActive(false). */
         dbusCall('ClearChromeRegions', null, null);
         this._regionsPublished = false;
+
+        /* Clear the paused bit in Mutter before going inactive. Otherwise
+         * a subsequent enable (without the overview being toggled) would
+         * leave the actor hidden since update_actor_visibility requires
+         * active && !paused. */
+        dbusCall('SetPaused', new GLib.Variant('(b)', [false]), null);
+        this._setPausedRetryId = removeSource(this._setPausedRetryId);
 
         dbusCall('SetActive', new GLib.Variant('(b)', [false]), null);
 

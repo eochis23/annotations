@@ -312,7 +312,7 @@ meta_compositor_manage (MetaCompositor  *compositor,
   priv->plugin_mgr = meta_plugin_manager_new (compositor, plugin_options);
   meta_plugin_manager_start (priv->plugin_mgr);
 
-  priv->annotation_layer = meta_annotation_layer_new (priv->backend);
+  priv->annotation_layer = meta_annotation_layer_new (priv->backend, priv->display);
   priv->annotation_dbus = meta_annotation_dbus_new (priv->annotation_layer);
 
   return TRUE;

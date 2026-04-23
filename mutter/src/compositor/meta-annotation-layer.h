@@ -6,11 +6,13 @@
 #include <clutter/clutter.h>
 
 #include "meta/meta-backend.h"
+#include "meta/display.h"
 
 typedef struct _MetaAnnotationLayer MetaAnnotationLayer;
 
 META_EXPORT
-MetaAnnotationLayer *meta_annotation_layer_new (MetaBackend *backend);
+MetaAnnotationLayer *meta_annotation_layer_new (MetaBackend *backend,
+                                                MetaDisplay *display);
 
 META_EXPORT
 void meta_annotation_layer_destroy (MetaAnnotationLayer *layer);
@@ -34,6 +36,13 @@ void meta_annotation_layer_set_color (MetaAnnotationLayer *layer,
                                       double             g,
                                       double             b,
                                       double             a);
+
+/* Pause hides the annotation actor without touching active state, chrome
+ * regions, or pointer isolation. Used while the overview is showing so
+ * ink doesn't paint on top of the workspace thumbnails. */
+META_EXPORT
+void meta_annotation_layer_set_paused (MetaAnnotationLayer *layer,
+                                       gboolean             paused);
 
 META_EXPORT
 gboolean meta_annotation_layer_handle_event (MetaAnnotationLayer *layer,
