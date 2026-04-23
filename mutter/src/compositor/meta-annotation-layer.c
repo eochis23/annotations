@@ -23,6 +23,24 @@
 /* Drawing constants for pressure-sensitive ink. */
 #define ANNOT_BASE_WIDTH   6.0f
 #define ANNOT_MIN_PRESSURE 0.1f
+/* Libinput reports tilt in degrees. Wacom tablets top out around 60 deg;
+ * divide by this to normalize magnitude to [0, 1]. */
+#define ANNOT_TILT_DEG_FULL 60.0f
+/* How much tilt can widen the stroke. 1.5 => up to 2.5x width at full tilt. */
+#define ANNOT_TILT_WIDTH_BOOST 1.5f
+
+/* Tap-to-clear gesture thresholds. */
+#define TAP_HISTORY_SIZE      4
+#define TAP_MAX_DURATION_US   (300 * 1000)   /* press->release, 300 ms */
+#define TAP_MAX_MOVE_PX       10.0f
+#define TRIPLE_TAP_WINDOW_US  (500 * 1000)   /* 3 taps in 500 ms */
+#define QUAD_TAP_WINDOW_US    (750 * 1000)   /* 4 taps in 750 ms */
+
+typedef struct _TapRecord
+{
+  gint64 time_us;
+  MetaWindow *anchor; /* may be NULL for taps over the desktop/unattached */
+} TapRecord;
 
 typedef struct _ChromeRegion
 {
@@ -70,6 +88,22 @@ struct _MetaAnnotationLayer
   float stroke_last_x, stroke_last_y;   /* in target-surface local coords */
   gboolean stroke_active;
   float last_pressure;          /* last known tablet pressure, [0, 1] */
+  float last_tilt_factor;       /* width multiplier from tilt magnitude, >= 1 */
+
+  /* Pending tap state: set on press/touch-begin, consumed on
+   * release/touch-end to decide whether the interaction was brief +
+   * stationary enough to count as a tap. */
+  gboolean pending_tap;
+  gint64   pending_tap_press_us;
+  float    pending_tap_press_stage_x;
+  float    pending_tap_press_stage_y;
+  MetaWindow *pending_tap_anchor;
+
+  /* Rolling history of the last TAP_HISTORY_SIZE completed taps, used
+   * to detect the 3-tap / 4-tap gestures. Older entries in indices
+   * [0 .. tap_history_len-1]; newest at tap_history_len-1. */
+  TapRecord tap_history[TAP_HISTORY_SIZE];
+  guint     tap_history_len;
 
   /* Connection ids */
   gulong width_notify_id;
@@ -511,6 +545,23 @@ on_window_unmanaged (MetaWindow *win, gpointer data)
       layer->stroke_active = FALSE;
     }
 
+  /* A tap gesture in flight that references this window is now
+   * ambiguous; drop the whole history rather than leave dangling
+   * pointers behind. Same for the pending tap anchor. */
+  if (layer->pending_tap && layer->pending_tap_anchor == win)
+    layer->pending_tap = FALSE;
+  {
+    guint i;
+    for (i = 0; i < layer->tap_history_len; i++)
+      {
+        if (layer->tap_history[i].anchor == win)
+          {
+            layer->tap_history_len = 0;
+            break;
+          }
+      }
+  }
+
   /* Freeing `ink` via hash_table_remove also disconnects this handler;
    * GLib allows disconnecting from within the running callback. */
   g_hash_table_remove (layer->per_window, win);
@@ -747,6 +798,28 @@ recompose (MetaAnnotationLayer *layer)
 
   cairo_destroy (cr);
 
+  /* Erase any ink that landed over a chrome region (the annotation
+   * dock's buttons + the dock body). The chrome path already consumes
+   * the press events, but ink from under-dock windows can still
+   * composite into that area; punch it out so the dock always paints
+   * against transparent. */
+  if (layer->chrome_regions && layer->chrome_regions->len > 0)
+    {
+      cairo_t *erase = cairo_create (composite);
+      cairo_set_operator (erase, CAIRO_OPERATOR_CLEAR);
+      cairo_new_path (erase);
+      for (i = 0; i < layer->chrome_regions->len; i++)
+        {
+          ChromeRegion *r =
+            &g_array_index (layer->chrome_regions, ChromeRegion, i);
+          cairo_rectangle (erase,
+                           r->rect.origin.x, r->rect.origin.y,
+                           r->rect.size.width, r->rect.size.height);
+        }
+      cairo_fill (erase);
+      cairo_destroy (erase);
+    }
+
   cairo_surface_flush (composite);
 
   /* If recreate_buffers ran re-entrantly while we were drawing (e.g.
@@ -781,6 +854,9 @@ meta_annotation_layer_new (MetaBackend *backend, MetaDisplay *display)
   layer->rgba[2] = 0.2f;
   layer->rgba[3] = 1.0f;
   layer->last_pressure = 1.0f;
+  layer->last_tilt_factor = 1.0f;
+  layer->pending_tap = FALSE;
+  layer->tap_history_len = 0;
 
   layer->per_window =
     g_hash_table_new_full (g_direct_hash, g_direct_equal,
@@ -1026,14 +1102,16 @@ draw_segment (MetaAnnotationLayer *layer,
               float                x2,
               float                y2,
               float                p1,
-              float                p2)
+              float                p2,
+              float                tilt1,
+              float                tilt2)
 {
   cairo_t *cr;
   float dx = x2 - x1;
   float dy = y2 - y1;
   float len2 = dx * dx + dy * dy;
-  float w1 = ANNOT_BASE_WIDTH * pressure_to_width_multiplier (p1);
-  float w2 = ANNOT_BASE_WIDTH * pressure_to_width_multiplier (p2);
+  float w1 = ANNOT_BASE_WIDTH * pressure_to_width_multiplier (p1) * tilt1;
+  float w2 = ANNOT_BASE_WIDTH * pressure_to_width_multiplier (p2) * tilt2;
 
   if (!target)
     return;
@@ -1109,6 +1187,38 @@ event_get_pressure (const ClutterEvent *event, float *out)
   return TRUE;
 }
 
+/* Return TRUE and set *out if the event carries tilt axes. Output is a
+ * width multiplier in [1, 1+ANNOT_TILT_WIDTH_BOOST]; with a vertical pen
+ * (tilt=0) the multiplier is 1, so strokes are unchanged until the user
+ * starts leaning. */
+static gboolean
+event_get_tilt_factor (const ClutterEvent *event, float *out)
+{
+  gdouble *axes;
+  guint n_axes;
+  float xt, yt, mag;
+
+  if (!clutter_event_get_device_tool (event))
+    return FALSE;
+
+  axes = clutter_event_get_axes (event, &n_axes);
+  if (!axes)
+    return FALSE;
+  if ((int) CLUTTER_INPUT_AXIS_XTILT >= (int) n_axes ||
+      (int) CLUTTER_INPUT_AXIS_YTILT >= (int) n_axes)
+    return FALSE;
+
+  xt = (float) axes[CLUTTER_INPUT_AXIS_XTILT];
+  yt = (float) axes[CLUTTER_INPUT_AXIS_YTILT];
+  mag = sqrtf (xt * xt + yt * yt) / ANNOT_TILT_DEG_FULL;
+  if (mag < 0.0f) mag = 0.0f;
+  if (mag > 1.0f) mag = 1.0f;
+
+  if (out)
+    *out = 1.0f + ANNOT_TILT_WIDTH_BOOST * mag;
+  return TRUE;
+}
+
 static cairo_surface_t *
 stroke_target_surface (MetaAnnotationLayer *layer)
 {
@@ -1145,7 +1255,8 @@ convert_stage_to_local (MetaAnnotationLayer *layer,
 
 static void
 begin_stroke (MetaAnnotationLayer *layer, float stage_x, float stage_y,
-              gboolean pressure_known, float pressure)
+              gboolean pressure_known, float pressure,
+              gboolean tilt_known, float tilt_factor)
 {
   MetaWindow *anchor;
 
@@ -1169,28 +1280,34 @@ begin_stroke (MetaAnnotationLayer *layer, float stage_x, float stage_y,
    * already gates on `pressure > 0` for the same reason. */
   layer->last_pressure =
     (pressure_known && pressure > 0.0f) ? pressure : 1.0f;
+  layer->last_tilt_factor = tilt_known ? tilt_factor : 1.0f;
 }
 
 static void
 continue_stroke (MetaAnnotationLayer *layer, float stage_x, float stage_y,
-                 gboolean pressure_known, float pressure)
+                 gboolean pressure_known, float pressure,
+                 gboolean tilt_known, float tilt_factor)
 {
   cairo_surface_t *target;
   float lx, ly;
   float p_end;
+  float t_end;
 
   target = stroke_target_surface (layer);
   convert_stage_to_local (layer, stage_x, stage_y, &lx, &ly);
   p_end = pressure_known ? pressure : layer->last_pressure;
+  t_end = tilt_known ? tilt_factor : layer->last_tilt_factor;
 
   if (target)
     draw_segment (layer, target,
                   layer->stroke_last_x, layer->stroke_last_y, lx, ly,
-                  layer->last_pressure, p_end);
+                  layer->last_pressure, p_end,
+                  layer->last_tilt_factor, t_end);
 
   layer->stroke_last_x = lx;
   layer->stroke_last_y = ly;
   layer->last_pressure = p_end;
+  layer->last_tilt_factor = t_end;
   schedule_recompose (layer);
 }
 
@@ -1202,6 +1319,175 @@ end_stroke (MetaAnnotationLayer *layer)
   schedule_recompose (layer);
 }
 
+/* --------------- Tap-to-clear --------------- */
+
+/* Clear ink for a specific anchor. NULL means the unattached (desktop)
+ * surface. Schedules a recompose. Does not disturb other windows' ink. */
+static void
+clear_ink_for_anchor (MetaAnnotationLayer *layer, MetaWindow *anchor)
+{
+  if (!anchor)
+    {
+      surface_clear (layer->unattached_surface);
+    }
+  else
+    {
+      WindowInk *ink = g_hash_table_lookup (layer->per_window, anchor);
+      if (ink)
+        surface_clear (ink->surface);
+    }
+
+  /* An in-flight stroke into the just-cleared target would redraw
+   * segments into the cleared surface on the next motion; drop it. */
+  if (layer->stroke_anchor == anchor)
+    {
+      layer->stroke_active = FALSE;
+      set_stroke_anchor (layer, NULL);
+    }
+
+  schedule_recompose (layer);
+}
+
+static void
+tap_history_reset (MetaAnnotationLayer *layer)
+{
+  layer->tap_history_len = 0;
+}
+
+/* Drop history entries older than `now - QUAD_TAP_WINDOW_US`. Keeps the
+ * gesture checks cheap and means the user can have arbitrarily long
+ * gaps between unrelated tap bursts. */
+static void
+tap_history_prune (MetaAnnotationLayer *layer, gint64 now_us)
+{
+  guint keep_from = 0;
+  guint i;
+
+  for (i = 0; i < layer->tap_history_len; i++)
+    {
+      if (now_us - layer->tap_history[i].time_us <= QUAD_TAP_WINDOW_US)
+        break;
+      keep_from = i + 1;
+    }
+
+  if (keep_from == 0)
+    return;
+
+  if (keep_from >= layer->tap_history_len)
+    {
+      layer->tap_history_len = 0;
+      return;
+    }
+
+  for (i = keep_from; i < layer->tap_history_len; i++)
+    layer->tap_history[i - keep_from] = layer->tap_history[i];
+  layer->tap_history_len -= keep_from;
+}
+
+static void
+tap_history_append (MetaAnnotationLayer *layer,
+                    gint64               now_us,
+                    MetaWindow          *anchor)
+{
+  if (layer->tap_history_len == TAP_HISTORY_SIZE)
+    {
+      guint i;
+      for (i = 1; i < TAP_HISTORY_SIZE; i++)
+        layer->tap_history[i - 1] = layer->tap_history[i];
+      layer->tap_history_len = TAP_HISTORY_SIZE - 1;
+    }
+  layer->tap_history[layer->tap_history_len].time_us = now_us;
+  layer->tap_history[layer->tap_history_len].anchor = anchor;
+  layer->tap_history_len++;
+}
+
+/* Called right after a new tap has been appended to the history. Checks
+ * the rolling-window gestures, clears ink, and resets history on fire. */
+static void
+check_tap_gestures (MetaAnnotationLayer *layer)
+{
+  guint n = layer->tap_history_len;
+
+  /* Quad-tap: 4 taps inside QUAD_TAP_WINDOW_US anywhere -> clear all.
+   * tap_history_prune already dropped anything older than that window,
+   * so presence of 4 entries is sufficient. */
+  if (n >= TAP_HISTORY_SIZE)
+    {
+      meta_annotation_layer_clear (layer);
+      tap_history_reset (layer);
+      return;
+    }
+
+  /* Triple-tap: last 3 taps share an anchor and span <=TRIPLE_TAP_WINDOW_US. */
+  if (n >= 3)
+    {
+      TapRecord *a = &layer->tap_history[n - 3];
+      TapRecord *b = &layer->tap_history[n - 2];
+      TapRecord *c = &layer->tap_history[n - 1];
+
+      if (a->anchor == b->anchor && b->anchor == c->anchor &&
+          (c->time_us - a->time_us) <= TRIPLE_TAP_WINDOW_US)
+        {
+          clear_ink_for_anchor (layer, c->anchor);
+          tap_history_reset (layer);
+          return;
+        }
+    }
+}
+
+/* On press / touch-begin: remember the press so we can decide later
+ * whether the following release counts as a tap. */
+static void
+note_tap_press (MetaAnnotationLayer *layer,
+                float                stage_x,
+                float                stage_y,
+                MetaWindow          *anchor)
+{
+  layer->pending_tap = TRUE;
+  layer->pending_tap_press_us = g_get_monotonic_time ();
+  layer->pending_tap_press_stage_x = stage_x;
+  layer->pending_tap_press_stage_y = stage_y;
+  layer->pending_tap_anchor = anchor;
+}
+
+/* On release / touch-end: if the interaction was short + stationary,
+ * record it as a tap and fire any gesture that now matches. */
+static void
+note_tap_release (MetaAnnotationLayer *layer,
+                  float                stage_x,
+                  float                stage_y)
+{
+  gint64 now_us;
+  gint64 duration_us;
+  float  dx, dy;
+
+  if (!layer->pending_tap)
+    return;
+  layer->pending_tap = FALSE;
+
+  now_us = g_get_monotonic_time ();
+  duration_us = now_us - layer->pending_tap_press_us;
+  dx = stage_x - layer->pending_tap_press_stage_x;
+  dy = stage_y - layer->pending_tap_press_stage_y;
+
+  if (duration_us > TAP_MAX_DURATION_US)
+    return;
+  if (dx * dx + dy * dy > TAP_MAX_MOVE_PX * TAP_MAX_MOVE_PX)
+    return;
+
+  tap_history_prune (layer, now_us);
+  tap_history_append (layer, now_us, layer->pending_tap_anchor);
+  check_tap_gestures (layer);
+}
+
+static void
+cancel_tap_pending (MetaAnnotationLayer *layer)
+{
+  layer->pending_tap = FALSE;
+}
+
+/* --------------- Event entry --------------- */
+
 gboolean
 meta_annotation_layer_handle_event (MetaAnnotationLayer *layer,
                                     const ClutterEvent  *event)
@@ -1209,7 +1495,9 @@ meta_annotation_layer_handle_event (MetaAnnotationLayer *layer,
   ClutterEventType type;
   graphene_point_t pos;
   float pressure = 0.0f;
+  float tilt_factor = 1.0f;
   gboolean pressure_known;
+  gboolean tilt_known;
 
   g_return_val_if_fail (layer != NULL, FALSE);
   g_return_val_if_fail (event != NULL, FALSE);
@@ -1219,6 +1507,7 @@ meta_annotation_layer_handle_event (MetaAnnotationLayer *layer,
 
   type = clutter_event_type (event);
   pressure_known = event_get_pressure (event, &pressure);
+  tilt_known = event_get_tilt_factor (event, &tilt_factor);
 
   switch (type)
     {
@@ -1231,7 +1520,10 @@ meta_annotation_layer_handle_event (MetaAnnotationLayer *layer,
           return TRUE;
       }
       clutter_event_get_coords (event, &pos.x, &pos.y);
-      begin_stroke (layer, pos.x, pos.y, pressure_known, pressure);
+      begin_stroke (layer, pos.x, pos.y,
+                    pressure_known, pressure,
+                    tilt_known, tilt_factor);
+      note_tap_press (layer, pos.x, pos.y, layer->stroke_anchor);
       return TRUE;
 
     case CLUTTER_MOTION:
@@ -1246,11 +1538,28 @@ meta_annotation_layer_handle_event (MetaAnnotationLayer *layer,
 
         if (!layer->stroke_active && (btn || pressure_tip))
           {
-            begin_stroke (layer, pos.x, pos.y, pressure_known, pressure);
+            begin_stroke (layer, pos.x, pos.y,
+                          pressure_known, pressure,
+                          tilt_known, tilt_factor);
+            /* A stroke that begins on motion never saw a clean press,
+             * so it can't be a tap; make sure stale pending state
+             * doesn't accidentally count this as one on release. */
+            cancel_tap_pending (layer);
             return TRUE;
           }
 
-        continue_stroke (layer, pos.x, pos.y, pressure_known, pressure);
+        continue_stroke (layer, pos.x, pos.y,
+                         pressure_known, pressure,
+                         tilt_known, tilt_factor);
+
+        /* Drifting past the tap radius invalidates the pending tap. */
+        if (layer->pending_tap)
+          {
+            float ddx = pos.x - layer->pending_tap_press_stage_x;
+            float ddy = pos.y - layer->pending_tap_press_stage_y;
+            if (ddx * ddx + ddy * ddy > TAP_MAX_MOVE_PX * TAP_MAX_MOVE_PX)
+              cancel_tap_pending (layer);
+          }
 
         if (!(btn || pressure_tip))
           end_stroke (layer);
@@ -1258,37 +1567,52 @@ meta_annotation_layer_handle_event (MetaAnnotationLayer *layer,
       }
 
     case CLUTTER_BUTTON_RELEASE:
+      clutter_event_get_coords (event, &pos.x, &pos.y);
       if (layer->stroke_active)
-        {
-          clutter_event_get_coords (event, &pos.x, &pos.y);
-          continue_stroke (layer, pos.x, pos.y, pressure_known, pressure);
-        }
+        continue_stroke (layer, pos.x, pos.y,
+                         pressure_known, pressure,
+                         tilt_known, tilt_factor);
+      note_tap_release (layer, pos.x, pos.y);
       end_stroke (layer);
       return TRUE;
 
     case CLUTTER_TOUCH_BEGIN:
       clutter_event_get_coords (event, &pos.x, &pos.y);
-      begin_stroke (layer, pos.x, pos.y, pressure_known, pressure);
+      begin_stroke (layer, pos.x, pos.y,
+                    pressure_known, pressure,
+                    tilt_known, tilt_factor);
+      note_tap_press (layer, pos.x, pos.y, layer->stroke_anchor);
       return TRUE;
 
     case CLUTTER_TOUCH_UPDATE:
       if (layer->stroke_active)
         {
           clutter_event_get_coords (event, &pos.x, &pos.y);
-          continue_stroke (layer, pos.x, pos.y, pressure_known, pressure);
+          continue_stroke (layer, pos.x, pos.y,
+                           pressure_known, pressure,
+                           tilt_known, tilt_factor);
+          if (layer->pending_tap)
+            {
+              float ddx = pos.x - layer->pending_tap_press_stage_x;
+              float ddy = pos.y - layer->pending_tap_press_stage_y;
+              if (ddx * ddx + ddy * ddy > TAP_MAX_MOVE_PX * TAP_MAX_MOVE_PX)
+                cancel_tap_pending (layer);
+            }
         }
       return TRUE;
 
     case CLUTTER_TOUCH_END:
+      clutter_event_get_coords (event, &pos.x, &pos.y);
       if (layer->stroke_active)
-        {
-          clutter_event_get_coords (event, &pos.x, &pos.y);
-          continue_stroke (layer, pos.x, pos.y, pressure_known, pressure);
-        }
+        continue_stroke (layer, pos.x, pos.y,
+                         pressure_known, pressure,
+                         tilt_known, tilt_factor);
+      note_tap_release (layer, pos.x, pos.y);
       end_stroke (layer);
       return TRUE;
 
     case CLUTTER_TOUCH_CANCEL:
+      cancel_tap_pending (layer);
       end_stroke (layer);
       return TRUE;
 
@@ -1328,6 +1652,10 @@ meta_annotation_layer_set_chrome_regions (MetaAnnotationLayer *layer,
       graphene_rect_init (&r.rect, (float) x, (float) y, (float) w, (float) h);
       g_array_append_val (arr, r);
     }
+
+  /* Refresh the composite so ink under the new chrome regions gets
+   * erased on the next frame. */
+  schedule_recompose (layer);
 }
 
 void
@@ -1338,6 +1666,9 @@ meta_annotation_layer_clear_chrome_regions (MetaAnnotationLayer *layer)
   if (layer->chrome_regions)
     g_array_set_size (layer->chrome_regions, 0);
   g_clear_pointer (&layer->chrome_press_id, g_free);
+
+  /* No more chrome to punch out; let previously-erased pixels reappear. */
+  schedule_recompose (layer);
 }
 
 const char *
