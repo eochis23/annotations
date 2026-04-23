@@ -769,21 +769,31 @@ export class KateTrackerManager {
 
     _onAtspiEvent(event) {
         // #region agent log
-        /* H9b/H9c: fire BEFORE any filtering so we can tell
-         * "listener is wired but our Kate filter rejects" apart from
-         * "listener never fires for anything". Cap to 40 entries so a
-         * noisy session can't drown the journal. */
-        if ((this._anyEventCount ?? 0) < 40) {
-            this._anyEventCount = (this._anyEventCount ?? 0) + 1;
-            _agentDbg('KateTrackerManager._onAtspiEvent', 'any event (pre-filter)', {
+        /* Log ALL Kate-pid events uncapped, plus a periodic heartbeat
+         * every 100 non-Kate events so we can tell a quiet stream from
+         * a dead listener. Kate events are the only ones we need to
+         * diagnose the scroll signal; dropping the non-Kate cap also
+         * avoids the earlier 40-entry limit silently masking a
+         * post-discovery event burst. */
+        const kateMatch = event && event.source &&
+            [...this._trackers.values()].some(t => t.pid === safePid(event.source));
+        if (kateMatch) {
+            _agentDbg('KateTrackerManager._onAtspiEvent', 'kate-pid event', {
                 hypothesisId: 'H9b',
-                hasEvent: !!event,
-                hasSource: !!(event && event.source),
                 type: event?.type ?? null,
-                sourcePid: (event && event.source) ? safePid(event.source) : -1,
-                trackers: this._trackers.size,
-                seq: this._anyEventCount,
+                sourcePid: safePid(event.source),
+                sourceRole: safeRole(event.source),
             });
+        } else {
+            this._heartbeat = (this._heartbeat ?? 0) + 1;
+            if (this._heartbeat % 100 === 0) {
+                _agentDbg('KateTrackerManager._onAtspiEvent', 'heartbeat', {
+                    hypothesisId: 'H9b',
+                    total: this._heartbeat,
+                    lastType: event?.type ?? null,
+                    lastPid: (event && event.source) ? safePid(event.source) : -1,
+                });
+            }
         }
         // #endregion
         if (!event || !event.source) return;
@@ -802,20 +812,6 @@ export class KateTrackerManager {
         if (!pidMatches) return;
 
         const type = event.type;
-        // #region agent log
-        /* Post-fix verification: we want to see object:value-changed
-         * (scroll) and object:bounds-changed reach this handler when
-         * the user scrolls Kate. Absence here would mean AT-SPI is
-         * never delivering scroll events to our listener; presence
-         * without a following SetWindowScroll means the downstream
-         * filter (scrollbar ref / adjacency test) is rejecting them. */
-        _agentDbg('KateTrackerManager._onAtspiEvent', 'kate event', {
-            hypothesisId: 'post-fix',
-            pid: evPid,
-            type,
-            role: safeRole(event.source),
-        });
-        // #endregion
         for (const t of this._trackers.values()) {
             if (t.pid !== evPid) continue;
             if (type === 'object:value-changed') {
