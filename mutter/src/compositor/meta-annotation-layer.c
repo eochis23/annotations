@@ -42,8 +42,8 @@
 #define TAP_HISTORY_SIZE      4
 #define TAP_MAX_DURATION_US   (300 * 1000)   /* press->release, 300 ms */
 #define TAP_MAX_MOVE_PX       10.0f
-#define TRIPLE_TAP_WINDOW_US  (500 * 1000)   /* 3 taps in 500 ms */
-#define QUAD_TAP_WINDOW_US    (750 * 1000)   /* 4 taps in 750 ms */
+#define TRIPLE_TAP_WINDOW_US  (750 * 1000)   /* 3 taps in 750 ms */
+#define QUAD_TAP_WINDOW_US    (100 * 1000)   /* 4 taps in 1000 ms */
 
 typedef struct _TapRecord
 {

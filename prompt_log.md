@@ -1,3 +1,13 @@
+# User prompts
+
+All prompts are made to Cursor's Auto model unless otherwise specified
+
+I did some initial exploratory code myself, but most of the project came through instructing it to take the better path when presented with options, and having it be required to give me those options and stop incrementally.
+
+I also left some of the auto-formatted debug prompts that came from when I got the log of some chats out because I thought that was interesting.
+
+---
+
 ## 1
 
 The overlay now comes up, but I can't draw and it's partially obscured by the top bar
@@ -118,221 +128,92 @@ what if the dock was just part of the annotation layer and the mouse couldn't in
 
 ---
 
-## 21
+## 21 — Window-following MVP (same Cursor thread; digest)
 
-How hard is this to implement?
-
----
-
-## 22
-
-What if we just got window information and did everything within the single annotation layer?
-
----
-
-## 23
-
-Draft a plan for single-layer, getting to MVP with annotations not drawn during overview and nothing for animations yet
+- How hard is this to implement?
+- What if we just got window information and did everything within the single annotation layer?
+- Draft a plan for single-layer, getting to MVP with annotations not drawn during overview and nothing for animations yet
+- Also add to the plan the taking into account of pen pressure and tilt → revised to pressure only
+- Build the plan
+- Write a description of the changes to `window-following-changes.md` in this parent folder
+- What happens when a window resizes?
+- Implement tilt, and triple-tap (non-mouse) on a window within 0.5s clears that window’s annotations; four taps within 0.75s clears all
+- Also, don’t draw on top of the dock
+- Make the pen barrel button erase by stroke when held down
+- For erasing: in erase mode, touching a stroke deletes the whole stroke (not partial erase); make tilt 25% more obvious
 
 ---
 
-## 24
+## 22 — Kate + AT-SPI scroll direction
 
-Also add to the plan the taking into account of pen pressure and tilt
-
----
-
-## 25
-
-actually just pressure
-
----
-
-## 26
-
-Build the plan
+- How hard would it be to implement scroll detection for an app I know to have static content?
+- How hard would it be for you to do option B?
+- User pasted a long **Option B: AT-SPI2** description (walk accessibility tree, subscribe to bounds/value events, map scrollbar value to pixels; pros/cons; hand-tune per editor).
+- How about doing it the easy way for some specific code editor that would be the nicest for this
+- Will GNOME Builder work for non-gnome related projects?
+- how about sublime?
+- Create a plan for making scrolling annotations work with **Kate**, separating the **terminal** from the **code editing** portion; then implement the plan; then do thorough checks
 
 ---
 
-## 27
+## 23 — QoL pass, defaults, packaged Kate
 
-write a description of the changes you made to an md document in this parent folder called "window-following-changes.md"
-
----
-
-## 28
-
-What happens when a window resizes?
+- commit, then make a list of small quality-of-life improvements for this annotation layer; make a plan to implement them, and implement them
+- is black the default color
+- change the default color in mutter to be black as well
+- Should we include a version of kate to install with this to make sure compatibility works?
 
 ---
 
-## 29
+## 24 — Kate scroll bug + workflow
 
-Implement tilt, and also if the uses triple taps the a window with a non-mouse input in half a second, then clear annotations on that window. 4 taps in 0.75 seconds and clear all annotations
+- Annotations don't scroll in Kate
+- Host copy of debug log failed: `cp "$MOUNT_POINT/tmp/debug-da8410.log" ...` → `cannot stat '/tmp/debug-da8410.log'`
+- Is it necessary to open the dock after kate is open?
+- isn't step 1 done in install_second_partition?
+- Is scrolling with the touchpad fine?
+- I don't have a mouse wheel
 
----
-
-## 30
-
-Also, don't draw on top of the dock
-
----
-
-## 31
-
-make the pen barrel button erase by stroke when held down
 
 ---
 
-## 32
+## 25 — Scroll-follow still imperfect
 
-For the erasing, when the pen is in erase mode and touches a previously made stroke, delete that whole stroke (not erase part of it like the current implementation) also, make the changes for tilt 25% more obvious
-
----
-
-## 33
-
-How hard would it be to implement scroll detection for an app I know to have static content
+- That's much better! Annotations move with the scrolling most of the time, but sometimes they don't
+- Scrolling with the keyboard works fine now, but the scroll bar on the side doesn't
 
 ---
 
-## 34
+## 26 — Extension layout, install scripts, mutter pointer fork, self-service work (digest)
 
-How hard would it be for you to do option B?
+**Two `extension.js` files — which one runs?**
 
----
 
-## 35
 
-Option B is this one: Option B: AT-SPI2 (medium, ~3-5 days)
-GNOME already exposes a per-app accessibility tree over D-Bus (AT-SPI2). Most document apps (Firefox, Chromium, Evince, Okular, LibreOffice, GTK-native apps, most Qt apps) expose scrollable containers with a viewport that emits change events when scroll position changes. You'd:
+**What `install_second_partition.sh` installs (extensions)**
 
-From the shell extension or a new small service, connect to org.a11y.Bus and get a handle on the application matching the focused window (via app PID → AT-SPI app).
-Walk the accessible tree to find the scrollable container (role DOCUMENT_FRAME, SCROLL_PANE, VIEWPORT, or the Component + scrollbar pair).
-Subscribe to object:bounds-changed / object:visible-data-changed / scrollbar value-changed signals.
-Translate the change into pixel scroll deltas (scrollbar value as fraction × content height, for example), feed into the same per-WindowInk offset.
-Pros: accurate, covers any scroll mechanism (keyboard, scrollbar, programmatic, Ctrl+F), app-agnostic as long as the app is AT-SPI-exposing. Cons:
 
-AT-SPI tree walking is slow on first discovery (tens of ms).
-Not every app behaves. Electron apps are notoriously flaky, custom-drawn apps (emacs, terminals) typically don't expose scroll.
-Scrollbar value → pixel mapping isn't exact for apps that snap-to-line.
-You need to handle app focus changes and retire stale subscriptions.
-Since you said "an app I know to have static content," this is probably the sweet spot. You'd only need to get it right for that one app — which means you can hand-tune the AT-SPI tree walk to the specific roles it exposes and avoid the generic-fallback headaches.
+**Is `annotations-shell-extension/` unused?**
 
----
 
-## 36
 
-How about doing it in the easy way for some specific code editor that would be the nicest for this
+**Ideas for relatively simple self-service contributions**
 
----
+- Expose existing gsettings **`dock-x` / `dock-y`** in **`prefs.js`** (schema already exists; **`lib/overlaySession.js`** reads them); optionally **`changed::dock-x` / `dock-y`** + **`queue_relayout`** for live updates.
+- Hide **“Run synthetic motion test”** behind a boolean gsettings + prefs switch.
+- **`install.sh` / `install_second_partition.sh`**: `--help` / `--dry-run` style UX.
 
-## 37
+**Where Mutter was modified for pointer (fork vs exploration)**
 
-will gnome-builder work for non-gnome related projects?
+- **Current fork (patch):** **`patches/0001-mutter-annotation-fork-pointer-hook.patch`** — optional **`wl_pointer`** focus rewrite in **`src/wayland/meta-wayland-seat.c`** inside **`default_focus`** (pointer-like branch → **`fork_annotation_resolve_pointer_surface`** then **`meta_wayland_pointer_focus_surface`**); public API **`meta_fork_annotation_set_pointer_passthrough`** on compositor/seat; **`docs/input-trace.md`** documents the choke point. **Separate** from tablet path.
+- **Distinct:** **`mutter/src/core/meta-annotation-input.c`** + seat backend hooks = **which Clutter streams** hit the annotation overlay vs clients (not the same as **`wl_pointer.enter`** rewriting).
 
----
+**`mutter_exploration` branch (early work, merged via `172755a`)**
 
-## 38
+- **`77cdbaa` (“annotations first draft iteration 3”)** added compositor annotation layer, D-Bus, **`meta_annotation_event_targets_overlay()`**, and **`meta_compositor_route_annotation_event()`** from **`meta_display_handle_event`** **before** **`meta_wayland_compositor_handle_event`** so overlay-classified input could **`CLUTTER_EVENT_STOP`** and not reach Wayland clients; plain mouse (pointer without tablet-tool capability) stayed for normal clicks; **`meta-annotation-layer.c`** had **`pointer_has_draw_button`** for mouse-draw with button held.
+- That era did **not** yet use the **Wayland seat `default_focus` / `wl_pointer` repick** patch (that is **`0001`**).
 
-how about sublime?
+**Walk-through: “number one” (dock position in Preferences)**
 
----
+- Intended steps: add **`dock-x` / `dock-y`** controls to **`prefs.js`** (e.g. spin rows bound to settings); in **`OverlaySession`**, after initial read from gsettings, connect **`changed::dock-x`** / **`changed::dock-y`**, update **`_dockPos`**, call **`this._root.queue_relayout()`**; disconnect those handlers in **`destroy()`**. Re-run **`make schemas`** / pack as usual.
 
-## 39
-
-Create a plan for making scrolling annotations work with kate, separating the terminal and the code editing portion. Then implement the plan. Once that's done, do thorough checks to see if everything would work
-
----
-
-## 40
-
-commit, then make a list of small quality of life improvements for this annotation layer. Make a plan to implement them, and implement them.
-
----
-
-## 41
-
-is black the default color
-
----
-
-## 42
-
-change the default color in mutter to be black as well
-
----
-
-## 43
-
-Should we include a version of kate to install with this to make sure compatibility works?
-
----
-
-## 44
-
-Annotations don't scroll in Kate
-
----
-
-## 45
-
-```text
-[eochis@eric-spectre ~]$ cp "$MOUNT_POINT/tmp/debug-da8410.log" /home/eochis/Projects/annotations/.cursor/debug-da8410.log
-cp: cannot stat '/tmp/debug-da8410.log': No such file or directory
-[eochis@eric-spectre ~]$
-```
-
----
-
-## 46
-
-Is it necessary to open the dock after kate is open?
-
----
-
-## 47
-
-isn't step 1 done in install_second_partition?
-
----
-
-## 48
-
-Is scrolling with the touchpad fine?
-
----
-
-## 49
-
-I don't have a mouse wheel
-
----
-
-## 50
-
-That's much better! Annotations move with the scrolling most of the time, but sometimes they don't
-
----
-
-## 51
-
-Scrolling with the keyboard works fine now, but the scroll bar on the side doesn't
-
----
-
-## 52
-
-Add all significant (not simple one liner) chats from this session to prompt_log.md then we'll keep debugging
-
----
-
-## 53
-
-remove anything I didn't say from prompt_log.md
-
----
-
-## 54
-
-remove all commentary by AI along with responses
